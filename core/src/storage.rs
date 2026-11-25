@@ -279,16 +279,83 @@ fn find(cfg: &Config, name: &str) -> Result<(Disk, Partition), String> {
     if !valid_devname(name) {
         return Err("Tên thiết bị không hợp lệ".into());
     }
-    for d in list(cfg) {
+    let disks = list(cfg);
+    for d in &disks {
         let found = d.partitions.iter().find(|p| p.name == name).cloned();
         if let Some(p) = found {
             if d.system {
                 return Err("Không thể thao tác trên thẻ nhớ hệ thống".into());
             }
-            return Ok((d, p));
+            return Ok((d.clone(), p));
         }
     }
-    Err(format!("Không tìm thấy phân vùng {name}"))
+    let present: Vec<String> = disks
+        .iter()
+        .filter(|d| !d.system)
+        .flat_map(|d| d.partitions.iter().map(|p| p.name.clone()).chain(std::iter::once(d.name.clone())))
+        .collect();
+    Err(format!(
+        "Không tìm thấy phân vùng {name} — ổ có thể vừa bị ngắt/cắm lại (nguồn USB yếu?). Đang có: {}. Bấm \"Làm mới\".",
+        if present.is_empty() { "không có ổ dữ liệu nào".to_string() } else { present.join(", ") }
+    ))
+}
+
+/// `blkid` output, completed with filesystem types read straight from the
+/// superblocks. BusyBox blkid may be built without TYPE output, and the UI
+/// needs the type to offer "Mount" instead of "Format".
+pub fn h_blkid() -> String {
+    let mut map = parse_blkid(&util::run_ro("blkid", &[]).unwrap_or_default());
+    if let Ok(rd) = fs::read_dir("/sys/class/block") {
+        for e in rd.filter_map(Result::ok) {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if SKIP_PREFIXES.iter().any(|p| name.starts_with(p)) || !valid_devname(&name) {
+                continue;
+            }
+            let dev = format!("/dev/{name}");
+            let has_type = map.get(&dev).is_some_and(|kv| kv.contains_key("TYPE"));
+            if !has_type {
+                if let Some(t) = probe_fs_type(&dev) {
+                    map.entry(dev).or_default().insert("TYPE".into(), t.into());
+                }
+            }
+        }
+    }
+    let mut lines: Vec<String> = map
+        .into_iter()
+        .filter(|(_, kv)| !kv.is_empty())
+        .map(|(dev, kv)| {
+            let mut kv: Vec<(String, String)> = kv.into_iter().collect();
+            kv.sort();
+            let fields: Vec<String> = kv.iter().map(|(k, v)| format!("{k}=\"{}\"", v.replace('"', ""))).collect();
+            format!("{dev}: {}", fields.join(" "))
+        })
+        .collect();
+    lines.sort();
+    lines.join("\n")
+}
+
+/// Identify a filesystem from its first 4 KiB.
+fn probe_fs_type(dev: &str) -> Option<&'static str> {
+    use std::io::Read;
+    let mut b = [0u8; 4096];
+    fs::File::open(dev).ok()?.read_exact(&mut b).ok()?;
+    fs_type_from_superblock(&b)
+}
+
+fn fs_type_from_superblock(b: &[u8; 4096]) -> Option<&'static str> {
+    if b[1080..1082] == [0x53, 0xEF] {
+        Some("ext4") // ext2/3/4 share the magic; the ext4 driver mounts all three
+    } else if &b[3..11] == b"NTFS    " {
+        Some("ntfs")
+    } else if &b[3..11] == b"EXFAT   " {
+        Some("exfat")
+    } else if &b[82..90] == b"FAT32   " || &b[54..62] == b"FAT16   " || &b[54..62] == b"FAT12   " {
+        Some("vfat")
+    } else if &b[4086..4096] == b"SWAPSPACE2" {
+        Some("swap")
+    } else {
+        None
+    }
 }
 
 fn sanitize(s: &str) -> String {
@@ -700,6 +767,24 @@ mod tests {
         assert_eq!(m[0].mountpoint, "/mnt/my disk");
         assert_eq!(unescape("a\\134b"), "a\\b");
         assert_eq!(unescape("end\\04"), "end\\04");
+    }
+
+    #[test]
+    fn superblock_types() {
+        let mut b = [0u8; 4096];
+        assert_eq!(fs_type_from_superblock(&b), None);
+        b[1080] = 0x53;
+        b[1081] = 0xEF;
+        assert_eq!(fs_type_from_superblock(&b), Some("ext4"));
+        let mut b = [0u8; 4096];
+        b[3..11].copy_from_slice(b"NTFS    ");
+        assert_eq!(fs_type_from_superblock(&b), Some("ntfs"));
+        let mut b = [0u8; 4096];
+        b[3..11].copy_from_slice(b"EXFAT   ");
+        assert_eq!(fs_type_from_superblock(&b), Some("exfat"));
+        let mut b = [0u8; 4096];
+        b[82..90].copy_from_slice(b"FAT32   ");
+        assert_eq!(fs_type_from_superblock(&b), Some("vfat"));
     }
 
     #[test]

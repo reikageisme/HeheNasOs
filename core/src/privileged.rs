@@ -96,7 +96,7 @@ fn is_mutating(op: &Op) -> bool {
 pub fn exec(cfg: &Config, op: Op) -> Result<String, String> {
     let _guard = if is_mutating(&op) { Some(WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner())) } else { None };
     match op {
-        Op::Blkid => Ok(util::run_ro("blkid", &[]).unwrap_or_default()),
+        Op::Blkid => Ok(storage::h_blkid()),
         Op::Smart { disk } => storage::h_smart(cfg, &disk),
         Op::Mount { dev, mountpoint, fstype } => storage::h_mount(cfg, &dev, &mountpoint, &fstype),
         Op::Umount { mountpoint } => storage::h_umount(cfg, &mountpoint),

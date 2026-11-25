@@ -444,7 +444,7 @@ function partActions(p, reload) {
     h('button', { class: 'btn small danger', onclick: () => wipeDialog('format', p.name, p.size_bytes, reload) }, 'Format'));
 }
 
-async function pageStorage({ show }) {
+async function pageStorage({ show, every }) {
   const { disks, smart } = await api('/api/storage/disks');
   const reload = () => route();
   const blocks = disks.map((d) => panel(
@@ -471,6 +471,13 @@ async function pageStorage({ show }) {
     h('p', { class: 'muted' }, 'Dữ liệu NAS nên nằm trên ổ USB, thẻ nhớ chỉ chứa hệ điều hành. Ổ HDD 2.5" nên cắm qua hub USB có nguồn riêng. Ổ đã mount sẽ tự mount lại sau khi khởi động (có kiểm tra lỗi filesystem trước).'),
     blocks.length ? h('div', { class: 'grid-wide' }, blocks) : h('div', { class: 'alert' }, 'Không tìm thấy ổ đĩa nào.'),
   );
+  // Re-render when a disk is plugged/unplugged/renamed (not while a dialog is open).
+  const sig = (ds) => JSON.stringify(ds.map((x) => [x.name, x.partitions.map((p) => [p.name, p.fstype, p.mountpoint])]));
+  const before = sig(disks);
+  every(async () => {
+    const r = await api('/api/storage/disks');
+    if (sig(r.disks) !== before && !document.querySelector('dialog[open]')) reload();
+  }, 8000);
 }
 
 // ---- Files ----------------------------------------------------------------

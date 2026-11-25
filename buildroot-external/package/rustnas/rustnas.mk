@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-RUSTNAS_VERSION = 1.0.0
+RUSTNAS_VERSION = 1.0.1
 RUSTNAS_SITE = $(BR2_EXTERNAL_RUSTNAS_PATH)/package/rustnas/files
 RUSTNAS_SITE_METHOD = local
 RUSTNAS_LICENSE = MIT
