@@ -32,9 +32,25 @@ jobs:
             ~/.cargo/git
             core/target
           key: cargo-${{ runner.os }}-${{ hashFiles('core/Cargo.toml') }}
+      - name: Build (errors become annotations)
+        working-directory: core
+        run: |
+          set +e
+          cargo test --no-run --message-format=json > ../build.json
+          s=$?
+          python3 ../scripts/ci-annotate.py < ../build.json
+          exit $s
       - name: Test
         working-directory: core
-        run: cargo test
+        shell: bash
+        run: |
+          set +e
+          cargo test 2>&1 | tee ../test.log
+          s=${PIPESTATUS[0]}
+          if [ "$s" -ne 0 ]; then
+            grep -E "panicked at|^test .* FAILED|left:|right:|assertion" ../test.log | head -30 | while IFS= read -r l; do echo "::error title=test::$l"; done
+          fi
+          exit $s
       - name: Clippy
         # Lints become annotations on the run page; they don't block the build.
         continue-on-error: true
