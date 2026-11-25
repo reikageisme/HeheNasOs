@@ -35,11 +35,38 @@ jobs:
 
       - name: Download images
         run: |
-          gh run download "$RUN" -n rustnas-rpi3 -D dist
-          gh run download "$RUN" -n rustnas-x86_64 -D dist
-          gh run download "$RUN" -n rustnasd-binaries -D bin
-          cp "$(find bin -path '*aarch64*' -name rustnasd)" dist/rustnasd-aarch64
-          cp "$(find bin -path '*x86_64*' -name rustnasd)" dist/rustnasd-x86_64
+          gh run download "$RUN" -n hehenas-rpi3 -D dist
+          gh run download "$RUN" -n hehenas-x86_64 -D dist
+          gh run download "$RUN" -n hehenasd-binaries -D bin
+          cp "$(find bin -path '*aarch64*' -name hehenasd)" dist/hehenasd-aarch64
+          cp "$(find bin -path '*x86_64*' -name hehenasd)" dist/hehenasd-x86_64
+
+      - name: Sign update bundles (ed25519)
+        env:
+          SIGNING_KEY: ${{ secrets.HEHENAS_SIGNING_KEY }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::warning::Secret HEHENAS_SIGNING_KEY is not set: update bundles are UNSIGNED and devices will refuse them over the air."
+            exit 0
+          fi
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > "$RUNNER_TEMP/key.pem"
+          for t in dist/hehenas-*-update-*.tar; do
+            [ -f "$t" ] || continue
+            d=$(mktemp -d)
+            tar -C "$d" -xf "$t"
+            openssl pkeyutl -sign -inkey "$RUNNER_TEMP/key.pem" -rawin -in "$d/manifest.json" -out "$d/manifest.sig"
+            # Self-check with the public key before publishing.
+            openssl pkey -in "$RUNNER_TEMP/key.pem" -pubout -out "$d/pub.pem"
+            openssl pkeyutl -verify -pubin -inkey "$d/pub.pem" -rawin -in "$d/manifest.json" -sigfile "$d/manifest.sig"
+            tar --format=ustar -C "$d" -cf "$t" manifest.json manifest.sig Image rootfs.ext4.gz
+            rm -rf "$d"
+            echo "signed $t"
+          done
+          rm -f "$RUNNER_TEMP/key.pem"
+
+      - name: Checksums
+        run: |
           cd dist
           sha256sum * > SHA256SUMS
           ls -lh
@@ -50,4 +77,4 @@ jobs:
               -e "s/@RUN@/$RUN/g" \
               -e "s/@SHA@/${BUILD_SHA:0:7}/g" \
               .github/release-notes.md > notes.md
-          gh release create "$GITHUB_REF_NAME" dist/* --title "RustNAS OS $GITHUB_REF_NAME" --notes-file notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --title "HeheNAS OS $GITHUB_REF_NAME" --notes-file notes.md

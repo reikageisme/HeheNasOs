@@ -1,4 +1,4 @@
-//! Daemon configuration (/etc/rustnas/rustnasd.toml). Read-only at runtime;
+//! Daemon configuration (/etc/hehenas/hehenasd.toml). Read-only at runtime;
 //! settings changed from the web UI live in `state_dir` (see settings.rs).
 
 use std::path::{Path, PathBuf};
@@ -44,6 +44,12 @@ pub struct Config {
     pub boot_dir: PathBuf,
     pub slot_a_dev: String,
     pub slot_b_dev: String,
+    /// GitHub "owner/repo" whose latest release is checked for updates.
+    pub update_repo: String,
+    /// Hex ed25519 public key for update bundles ("" = the built-in key).
+    pub update_pubkey: String,
+    /// Accept unsigned bundles (development only).
+    pub allow_unsigned_updates: bool,
 
     /// Unix account that owns shared files (SMB "force user", NFS squash,
     /// and the account the web server runs as under privsep).
@@ -61,19 +67,19 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let etc = PathBuf::from("/var/lib/rustnas/etc");
+        let etc = PathBuf::from("/var/lib/hehenas/etc");
         Self {
             listen: "0.0.0.0:8080".into(),
             https_listen: "0.0.0.0:8443".into(),
-            state_dir: "/var/lib/rustnas".into(),
+            state_dir: "/var/lib/hehenas".into(),
             mount_root: "/mnt".into(),
             system_disk: String::new(),
             board: "rpi3b".into(),
             privsep: true,
-            helper_socket: "/run/rustnas/helper.sock".into(),
-            smb_conf: "/var/lib/rustnas/ksmbd/ksmbd.conf".into(),
+            helper_socket: "/run/hehenas/helper.sock".into(),
+            smb_conf: "/var/lib/hehenas/ksmbd/ksmbd.conf".into(),
             smb_service: "/etc/init.d/S60ksmbd".into(),
-            nfs_service: "/usr/libexec/rustnas/nfs-service".into(),
+            nfs_service: "/usr/libexec/hehenas/nfs-service".into(),
             exports_file: etc.join("exports"),
             hostname_file: etc.join("hostname"),
             hosts_file: etc.join("hosts"),
@@ -84,6 +90,9 @@ impl Default for Config {
             boot_dir: "/boot".into(),
             slot_a_dev: "mmcblk0p2".into(),
             slot_b_dev: "mmcblk0p3".into(),
+            update_repo: "reikageisme/HeheNasOs".into(),
+            update_pubkey: String::new(),
+            allow_unsigned_updates: false,
             share_user: "nas".into(),
             share_uid: 1000,
             share_gid: 1000,

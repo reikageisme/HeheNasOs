@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-compile rustnasd as a static musl binary.
+# Cross-compile hehenasd as a static musl binary.
 #   TARGET=aarch64-unknown-linux-musl (default, Raspberry Pi) | x86_64-unknown-linux-musl
 # The TLS stack (ring) contains C/asm, so an aarch64 C compiler is needed:
 #   Ubuntu/Debian: sudo apt install gcc-aarch64-linux-gnu
@@ -33,7 +33,7 @@ esac
 cd "$CORE"
 cargo build --release --target "$TARGET"
 
-BIN="$CORE/target/$TARGET/release/rustnasd"
+BIN="$CORE/target/$TARGET/release/hehenasd"
 echo
 ls -lh "$BIN"
 command -v file >/dev/null && file "$BIN"

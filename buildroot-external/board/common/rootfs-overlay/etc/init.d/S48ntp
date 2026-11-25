@@ -1,0 +1,38 @@
+#!/bin/sh
+#
+# Time keeping. The Pi has no battery-backed clock: restore the last time
+# rustnasd saved, then keep it right with NTP. HTTPS update checks need a
+# correct clock to validate certificates.
+#
+
+CLOCK=/var/lib/rustnas/.clock
+PIDFILE=/var/run/ntpd.pid
+
+start() {
+	if [ -s "$CLOCK" ]; then
+		saved=$(cat "$CLOCK" 2>/dev/null)
+		now=$(date +%s)
+		if [ -n "$saved" ] && [ "$saved" -gt "$now" ] 2>/dev/null; then
+			date -s "@$saved" >/dev/null 2>&1 && echo "clock restored to $(date)"
+		fi
+	fi
+	if command -v ntpd >/dev/null; then
+		printf "Starting ntpd: "
+		start-stop-daemon -S -q -b -m -p "$PIDFILE" -x /usr/sbin/ntpd -- -n \
+			-p 0.pool.ntp.org -p 1.pool.ntp.org -p time.google.com -p time.cloudflare.com \
+			&& echo "OK" || echo "FAIL"
+	fi
+}
+
+stop() {
+	start-stop-daemon -K -q -p "$PIDFILE" 2>/dev/null
+	rm -f "$PIDFILE"
+	date +%s > "$CLOCK" 2>/dev/null
+}
+
+case "$1" in
+	start) start;;
+	stop) stop;;
+	restart) stop; start;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1;;
+esac

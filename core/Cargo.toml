@@ -1,9 +1,9 @@
 [package]
-name = "rustnasd"
-version = "1.0.1"
+name = "hehenasd"
+version = "1.1.0"
 edition = "2021"
 license = "MIT"
-description = "RustNAS management daemon: REST API + embedded web dashboard"
+description = "HeheNAS management daemon: REST API + embedded web dashboard"
 rust-version = "1.85"
 
 [dependencies]
@@ -25,6 +25,10 @@ rcgen = { version = "0.13", default-features = false, features = ["ring", "pem",
 # A/B system updates: gzip-compressed rootfs + SHA-256 verification (pure Rust).
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 sha2 = "0.10"
+# Over-the-air updates: HTTPS client (rustls + bundled CA roots) and
+# ed25519 signature checks on every update bundle.
+ureq = { version = "2", default-features = false, features = ["tls"] }
+ed25519-dalek = "2"
 
 [profile.release]
 opt-level = "s"      # size over speed: the Pi 3B is I/O bound, not CPU bound

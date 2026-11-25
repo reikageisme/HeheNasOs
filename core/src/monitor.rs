@@ -36,9 +36,29 @@ pub struct Snapshot {
     pub uptime_secs: u64,
     pub net_rx_bps: u64,
     pub net_tx_bps: u64,
-    /// Resident memory of rustnasd itself.
+    /// Resident memory of hehenasd itself.
     pub daemon_rss: u64,
     pub timestamp: u64,
+    /// Per-core CPU usage (%).
+    pub cores: Vec<f32>,
+    /// Per-disk throughput.
+    pub disks: Vec<DiskIo>,
+}
+
+#[derive(Serialize, Clone, Default)]
+pub struct DiskIo {
+    pub name: String,
+    pub read_bps: u64,
+    pub write_bps: u64,
+}
+
+/// One sampling interval's measured rates.
+struct Sample {
+    cpu: f32,
+    cores: Vec<f32>,
+    rx: u64,
+    tx: u64,
+    disks: Vec<DiskIo>,
 }
 
 #[derive(Serialize, Clone)]
@@ -48,6 +68,9 @@ pub struct Point {
     pub mem: u64,
     pub rx: u64,
     pub tx: u64,
+    /// Total disk read / write bytes per second.
+    pub dr: u64,
+    pub dw: u64,
 }
 
 pub struct Monitor {
@@ -75,13 +98,16 @@ impl Monitor {
         self.inner.read().unwrap().1.iter().cloned().collect()
     }
 
-    fn update(&self, cpu: f32, rx: u64, tx: u64) {
+    fn update(&self, x: Sample) {
         let mut s = Snapshot::default();
         fill(&mut s);
-        s.cpu_percent = cpu;
-        s.net_rx_bps = rx;
-        s.net_tx_bps = tx;
-        let p = Point { t: s.timestamp, cpu, mem: s.mem_total.saturating_sub(s.mem_available), rx, tx };
+        s.cpu_percent = x.cpu;
+        s.net_rx_bps = x.rx;
+        s.net_tx_bps = x.tx;
+        let (dr, dw) = x.disks.iter().fold((0, 0), |(r, w), d| (r + d.read_bps, w + d.write_bps));
+        let p = Point { t: s.timestamp, cpu: x.cpu, mem: s.mem_total.saturating_sub(s.mem_available), rx: x.rx, tx: x.tx, dr, dw };
+        s.cores = x.cores;
+        s.disks = x.disks;
         let mut g = self.inner.write().unwrap();
         if g.1.len() >= HISTORY {
             g.1.pop_front();
@@ -94,20 +120,36 @@ impl Monitor {
 pub fn spawn_sampler(st: Shared) {
     tokio::spawn(async move {
         let mut prev_cpu = read_cpu();
+        let mut prev_cores = read_cores();
         let mut prev_net = read_net();
+        let mut prev_disks = read_diskstats();
         let mut prev_t = Instant::now();
         let mut iv = tokio::time::interval(INTERVAL);
         iv.tick().await; // first tick fires immediately
         loop {
             iv.tick().await;
             let cpu = read_cpu();
+            let cores = read_cores();
             let net = read_net();
+            let disks = read_diskstats();
             let now = Instant::now();
             let dt = now.duration_since(prev_t).as_secs_f64().max(0.001);
-            let rx = (net.0.saturating_sub(prev_net.0) as f64 / dt) as u64;
-            let tx = (net.1.saturating_sub(prev_net.1) as f64 / dt) as u64;
-            st.monitor.update(cpu_percent(prev_cpu, cpu), rx, tx);
-            (prev_cpu, prev_net, prev_t) = (cpu, net, now);
+            let rate = |a: u64, b: u64| (b.saturating_sub(a) as f64 / dt) as u64;
+            let disk_io = disks
+                .iter()
+                .map(|(name, &(r, w))| {
+                    let (pr, pw) = prev_disks.get(name).copied().unwrap_or((r, w));
+                    DiskIo { name: name.clone(), read_bps: rate(pr, r) * 512, write_bps: rate(pw, w) * 512 }
+                })
+                .collect();
+            st.monitor.update(Sample {
+                cpu: cpu_percent(prev_cpu, cpu),
+                cores: cores.iter().zip(prev_cores.iter()).map(|(c, p)| cpu_percent(*p, *c)).collect(),
+                rx: rate(prev_net.0, net.0),
+                tx: rate(prev_net.1, net.1),
+                disks: disk_io,
+            });
+            (prev_cpu, prev_cores, prev_net, prev_disks, prev_t) = (cpu, cores, net, disks, now);
         }
     });
 }
@@ -174,6 +216,45 @@ fn read_cpu() -> (u64, u64) {
     (v.iter().sum(), v[3] + v[4])
 }
 
+/// (total, idle) jiffies for each cpuN line.
+fn read_cores() -> Vec<(u64, u64)> {
+    fs::read_to_string("/proc/stat")
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.starts_with("cpu") && l.as_bytes().get(3).is_some_and(u8::is_ascii_digit))
+        .map(|l| {
+            let v: Vec<u64> = l.split_whitespace().skip(1).take(8).filter_map(|x| x.parse().ok()).collect();
+            if v.len() < 5 { (0, 0) } else { (v.iter().sum(), v[3] + v[4]) }
+        })
+        .collect()
+}
+
+/// Whole disks only: name -> (sectors read, sectors written).
+fn read_diskstats() -> std::collections::BTreeMap<String, (u64, u64)> {
+    parse_diskstats(&fs::read_to_string("/proc/diskstats").unwrap_or_default())
+}
+
+fn is_whole_disk(n: &str) -> bool {
+    let tail_digit = n.ends_with(|c: char| c.is_ascii_digit());
+    (n.starts_with("sd") && !tail_digit)
+        || (n.starts_with("mmcblk") && !n.contains('p'))
+        || (n.starts_with("nvme") && !n.contains('p'))
+        || (n.starts_with("vd") && !tail_digit)
+}
+
+fn parse_diskstats(s: &str) -> std::collections::BTreeMap<String, (u64, u64)> {
+    s.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let name = *f.get(2)?;
+            if !is_whole_disk(name) {
+                return None;
+            }
+            Some((name.to_string(), (f.get(5)?.parse().ok()?, f.get(9)?.parse().ok()?)))
+        })
+        .collect()
+}
+
 fn cpu_percent(a: (u64, u64), b: (u64, u64)) -> f32 {
     let total = b.0.saturating_sub(a.0);
     let idle = b.1.saturating_sub(a.1);
@@ -204,6 +285,20 @@ fn read_net() -> (u64, u64) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn diskstats() {
+        let d = super::parse_diskstats(
+            "   8       0 sda 100 0 2048 10 50 0 4096 5 0 0 0
+   8       1 sda1 1 0 8 0 0 0 0 0 0 0 0
+ 179       0 mmcblk0 5 0 40 0 2 0 16 0 0 0 0
+ 179       2 mmcblk0p2 1 0 8 0 0 0 0 0 0 0 0
+",
+        );
+        assert_eq!(d.len(), 2);
+        assert_eq!(d["sda"], (2048, 4096));
+        assert_eq!(d["mmcblk0"], (40, 16));
+    }
+
     #[test]
     fn cpu_math() {
         assert_eq!(super::cpu_percent((100, 50), (200, 100)), 50.0);

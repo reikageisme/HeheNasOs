@@ -1,4 +1,4 @@
-//! rustnasd — RustNAS management daemon.
+//! hehenasd — HeheNAS management daemon.
 //!
 //! Started as root it forks: the parent stays root as a tiny helper that
 //! performs a fixed set of validated operations (privileged.rs); the child
@@ -43,6 +43,8 @@ pub struct AppState {
     pub alerts: Mutex<Vec<alerts::Alert>>,
     pub smart: Mutex<HashMap<String, storage::Smart>>,
     pub pending: Mutex<Option<netcfg::Pending>>,
+    pub online: Mutex<update::Online>,
+    pub job: Mutex<update::Job>,
     pub started: Instant,
 }
 
@@ -50,13 +52,13 @@ pub type Shared = Arc<AppState>;
 
 fn usage() -> ! {
     println!(
-        "Usage:\n  rustnasd [--config PATH]\n  rustnasd make-update --version V --board B --kernel Image --rootfs rootfs.ext4.gz --out bundle.tar"
+        "Usage:\n  hehenasd [--config PATH]\n  hehenasd make-update --version V --board B --kernel Image --rootfs rootfs.ext4.gz --out bundle.tar"
     );
     std::process::exit(0)
 }
 
 fn main() {
-    let mut cfg_path = PathBuf::from("/etc/rustnas/rustnasd.toml");
+    let mut cfg_path = PathBuf::from("/etc/hehenas/hehenasd.toml");
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("make-update") {
         make_update(&args[1..]);
@@ -66,7 +68,7 @@ fn main() {
         match arg.as_str() {
             "-c" | "--config" if !args.is_empty() => cfg_path = args.remove(0).into(),
             "-V" | "--version" => {
-                println!("rustnasd {}", env!("CARGO_PKG_VERSION"));
+                println!("hehenasd {}", env!("CARGO_PKG_VERSION"));
                 return;
             }
             _ => usage(),
@@ -118,7 +120,7 @@ fn main() {
 }
 
 fn die(msg: &str) -> ! {
-    eprintln!("rustnasd: {msg}");
+    eprintln!("hehenasd: {msg}");
     std::process::exit(1)
 }
 
@@ -144,7 +146,7 @@ fn prepare_state(cfg: &Config) -> Result<(), String> {
     std::fs::create_dir_all(state).map_err(|e| format!("{}: {e}", state.display()))?;
 
     // Recovery: files the user can drop on the FAT boot partition from any PC.
-    let factory = cfg.boot_dir.join("rustnas-factory-reset.txt");
+    let factory = cfg.boot_dir.join("hehenas-factory-reset.txt");
     if factory.exists() {
         info!("RECOVERY: factory reset requested");
         if let Ok(rd) = std::fs::read_dir(state) {
@@ -155,7 +157,7 @@ fn prepare_state(cfg: &Config) -> Result<(), String> {
         }
         let _ = std::fs::remove_file(&factory);
     }
-    let reset_admin = cfg.boot_dir.join("rustnas-reset-admin.txt");
+    let reset_admin = cfg.boot_dir.join("hehenas-reset-admin.txt");
     if reset_admin.exists() {
         info!("RECOVERY: admin account reset — open the web UI to create a new one");
         let _ = std::fs::remove_file(state.join("auth.toml"));
@@ -165,7 +167,7 @@ fn prepare_state(cfg: &Config) -> Result<(), String> {
     // Seed files the read-only rootfs links into /etc.
     let etc = state.join("etc");
     std::fs::create_dir_all(&etc).map_err(|e| e.to_string())?;
-    if let Ok(rd) = std::fs::read_dir("/usr/share/rustnas/etc-default") {
+    if let Ok(rd) = std::fs::read_dir("/usr/share/hehenas/etc-default") {
         for e in rd.filter_map(Result::ok) {
             let dst = etc.join(e.file_name());
             if !dst.exists() {
@@ -218,6 +220,8 @@ async fn run(cfg: Config) -> Result<(), String> {
         alerts: Mutex::new(Vec::new()),
         smart: Mutex::new(HashMap::new()),
         pending: Mutex::new(None),
+        online: Mutex::new(update::Online::default()),
+        job: Mutex::new(update::Job { state: "idle".into(), ..Default::default() }),
         started: Instant::now(),
         cfg,
     });
@@ -239,7 +243,7 @@ async fn run(cfg: Config) -> Result<(), String> {
         http_app.layer(Extension(web::Secure(false))).into_make_service_with_connect_info::<tls::Peer>(),
     )
     .with_graceful_shutdown(shutdown_signal());
-    info!("RustNAS {} — http://{}", env!("CARGO_PKG_VERSION"), cfg.listen);
+    info!("HeheNAS {} — http://{}", env!("CARGO_PKG_VERSION"), cfg.listen);
 
     if settings.https {
         let sc = tls::server_config(cfg)?;
@@ -323,11 +327,54 @@ fn spawn_housekeeping(state: Shared) {
                 if t == 2 && st.started.elapsed() >= Duration::from_secs(90) {
                     let _ = privileged::call(&st.cfg, privileged::Op::UpdateConfirm);
                 }
+                // Remember the time: the Pi has no RTC (restored at boot by S48ntp).
+                if t % 10 == 1 && update::clock_ok() {
+                    let _ = std::fs::write(st.cfg.state_dir.join(".clock"), util::now_secs().to_string());
+                }
+                over_the_air(&st, t);
             })
             .await;
             tick += 1;
         }
     });
+}
+
+/// Check for updates every 6 h; in "install" mode download + stage them and
+/// reboot during the configured hour.
+fn over_the_air(st: &Shared, tick: u64) {
+    let s = st.settings.lock().unwrap().clone();
+    if s.auto_update == "off" || !update::status(&st.cfg).supported {
+        return;
+    }
+    if tick == 3 || tick % 360 == 3 {
+        let o = update::check(&st.cfg);
+        if o.available {
+            info!("OTA: version {} is available", o.latest.as_deref().unwrap_or("?"));
+        }
+        *st.online.lock().unwrap() = o;
+        let mut j = st.job.lock().unwrap();
+        if j.state == "error" {
+            j.state = "idle".into(); // retry after a fresh check
+        }
+    }
+    if s.auto_update != "install" {
+        return;
+    }
+    let state = st.job.lock().unwrap().state.clone();
+    let available = st.online.lock().unwrap().available;
+    if available && state == "idle" {
+        if let Err(e) = api::ota_install(st) {
+            info!("OTA: {e}");
+        }
+        return;
+    }
+    if state == "staged" && st.started.elapsed() > Duration::from_secs(600) {
+        let hour = ((util::now_secs() / 3600) as i64 + i64::from(s.tz_offset)).rem_euclid(24);
+        if hour == i64::from(s.update_hour) {
+            info!("OTA: rebooting into the new version (update hour {})", s.update_hour);
+            let _ = privileged::call(&st.cfg, privileged::Op::Power { action: "reboot".into() });
+        }
+    }
 }
 
 async fn shutdown_signal() {

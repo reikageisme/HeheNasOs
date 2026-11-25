@@ -1,1 +1,1 @@
-source "$BR2_EXTERNAL_RUSTNAS_PATH/package/rustnas/Config.in"
+source "$BR2_EXTERNAL_HEHENAS_PATH/package/hehenas/Config.in"

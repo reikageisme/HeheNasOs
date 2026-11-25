@@ -1,7 +1,7 @@
-# RustNAS daemon configuration — Raspberry Pi 3B image (read-only rootfs, A/B)
+# HeheNAS daemon configuration — Raspberry Pi 3B image (read-only rootfs, A/B)
 listen = "0.0.0.0:8080"          # HTTP (redirects to HTTPS when enabled)
 https_listen = "0.0.0.0:8443"
-state_dir = "/var/lib/rustnas"   # persistent partition (mmcblk0p4)
+state_dir = "/var/lib/hehenas"   # persistent partition (mmcblk0p4)
 mount_root = "/mnt"              # data disks are mounted at /mnt/<label>
 system_disk = ""                 # auto-detected from "/"
 board = "rpi3b"

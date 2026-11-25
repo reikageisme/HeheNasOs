@@ -1,4 +1,4 @@
-# RustNAS kernel options (all boards)
+# HeheNAS kernel options (all boards)
 
 # In-kernel SMB3 server (ksmbd): far lighter than Samba
 CONFIG_SMB_SERVER=m

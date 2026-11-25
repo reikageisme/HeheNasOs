@@ -21,8 +21,8 @@ use crate::{
 };
 
 const SKIP_PREFIXES: &[&str] = &["loop", "ram", "zram", "fd", "sr", "mtdblock", "nbd", "dm-"];
-pub const TRASH_DIR: &str = ".rustnas-trash";
-pub const UPDATE_DIR: &str = ".rustnas-update";
+pub const TRASH_DIR: &str = ".hehenas-trash";
+pub const UPDATE_DIR: &str = ".hehenas-update";
 
 #[derive(Serialize, Clone, Debug)]
 pub struct Partition {

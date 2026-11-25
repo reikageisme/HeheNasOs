@@ -1,16 +1,16 @@
 #!/bin/sh
 #
 # A/B update watchdog (Raspberry Pi image).
-# After an update, /boot/rustnas-try holds "<slot> <boots>". rustnasd removes
+# After an update, /boot/hehenas-try holds "<slot> <boots>". hehenasd removes
 # it once the new system has been healthy for 90 s. If the new slot boots
 # twice without confirming, switch back to the previous slot and reboot.
 #
 
 [ "$1" = start ] || exit 0
-TRY=/boot/rustnas-try
+TRY=/boot/hehenas-try
 [ -f "$TRY" ] || exit 0
 
-CUR=$(sed -n 's/.*rustnas\.slot=\([ab]\).*/\1/p' /proc/cmdline)
+CUR=$(sed -n 's/.*hehenas\.slot=\([ab]\).*/\1/p' /proc/cmdline)
 read -r SLOT COUNT < "$TRY"
 COUNT=${COUNT:-0}
 

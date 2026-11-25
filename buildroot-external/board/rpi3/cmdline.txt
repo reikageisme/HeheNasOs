@@ -1,1 +1,1 @@
-root=/dev/mmcblk0p2 rootfstype=ext4 rootwait ro panic=10 rustnas.slot=a console=tty1 console=ttyAMA0,115200
+root=/dev/mmcblk0p2 rootfstype=ext4 rootwait ro panic=10 hehenas.slot=a console=tty1 console=ttyAMA0,115200

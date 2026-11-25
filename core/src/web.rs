@@ -68,13 +68,13 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
     res
 }
 
-/// Mutating API calls must carry `X-RustNAS: 1`. Browsers cannot add custom
+/// Mutating API calls must carry `X-HeheNAS: 1`. Browsers cannot add custom
 /// headers to cross-site requests without a CORS preflight (which we never
 /// answer), so this blocks CSRF even beyond SameSite=Strict cookies.
 pub async fn csrf_guard(req: Request, next: Next) -> Response {
     let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
-    if !safe && req.uri().path().starts_with("/api/") && req.headers().get("x-rustnas").is_none_or(|v| v != "1") {
-        return ApiError::new(StatusCode::FORBIDDEN, "Yêu cầu bị chặn (thiếu header X-RustNAS)").into_response();
+    if !safe && req.uri().path().starts_with("/api/") && req.headers().get("x-hehenas").is_none_or(|v| v != "1") {
+        return ApiError::new(StatusCode::FORBIDDEN, "Yêu cầu bị chặn (thiếu header X-HeheNAS)").into_response();
     }
     next.run(req).await
 }

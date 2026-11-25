@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# Build a RustNAS OS image. Run on Linux or WSL2 (Ubuntu); GitHub Actions does
+# Build a HeheNAS OS image. Run on Linux or WSL2 (Ubuntu); GitHub Actions does
 # the same (see .github/workflows/build.yml).
 #
 #   BOARD=rpi3   scripts/build-image.sh     SD card image + A/B update bundle (default)
 #   BOARD=x86_64 scripts/build-image.sh     live ISO for PCs
 #   scripts/build-image.sh menuconfig       extra args go to Buildroot's make
 #
-# Env: RUSTNAS_WORK (default ~/rustnas-build), BUILDROOT_VERSION (git branch/tag)
+# Env: HEHENAS_WORK (default ~/hehenas-build), BUILDROOT_VERSION (git branch/tag)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BOARD="${BOARD:-rpi3}"
-WORK="${RUSTNAS_WORK:-$HOME/rustnas-build}"
+WORK="${HEHENAS_WORK:-$HOME/hehenas-build}"
 BR_VERSION="${BUILDROOT_VERSION:-2025.02.x}"
 BR_GIT="${BUILDROOT_GIT:-https://github.com/buildroot/buildroot.git}"
 BR_DIR="$WORK/buildroot"
 OUT="$WORK/output-$BOARD"
 
 case "$BOARD" in
-	rpi3) BASE=raspberrypi3_64_defconfig; FRAG=rustnas_rpi3.fragment; RTARGET=aarch64-unknown-linux-musl ;;
-	x86_64) BASE=pc_x86_64_bios_defconfig; FRAG=rustnas_x86_64.fragment; RTARGET=x86_64-unknown-linux-musl ;;
+	rpi3) BASE=raspberrypi3_64_defconfig; FRAG=hehenas_rpi3.fragment; RTARGET=aarch64-unknown-linux-musl ;;
+	x86_64) BASE=pc_x86_64_bios_defconfig; FRAG=hehenas_x86_64.fragment; RTARGET=x86_64-unknown-linux-musl ;;
 	*) echo "Unknown BOARD=$BOARD (rpi3 | x86_64)"; exit 1 ;;
 esac
 
@@ -52,7 +52,7 @@ find "$SRC/buildroot-external" "$SRC/scripts" -type f -exec sed -i 's/\r$//' {} 
 find "$SRC/scripts" "$SRC/buildroot-external" -type f \( -name '*.sh' -o -name 'S[0-9][0-9]*' \) -exec chmod 0755 {} +
 EXT="$SRC/buildroot-external"
 
-# ---- 2. rustnasd ------------------------------------------------------------
+# ---- 2. hehenasd ------------------------------------------------------------
 TARGET="$RTARGET" bash "$SRC/scripts/build-core.sh"
 
 # ---- 3. Buildroot ------------------------------------------------------------
@@ -64,7 +64,7 @@ if [ ! -f "$OUT/.config" ]; then
 	make -C "$BR_DIR" O="$OUT" BR2_EXTERNAL="$EXT" "$BASE"
 	"$BR_DIR/support/kconfig/merge_config.sh" -m -O "$OUT" "$OUT/.config" "$EXT/configs/$FRAG"
 	make -C "$BR_DIR" O="$OUT" olddefconfig
-	for sym in BR2_TOOLCHAIN_USES_MUSL BR2_PACKAGE_KSMBD_TOOLS BR2_PACKAGE_RUSTNAS BR2_PACKAGE_NFS_UTILS \
+	for sym in BR2_TOOLCHAIN_USES_MUSL BR2_PACKAGE_KSMBD_TOOLS BR2_PACKAGE_HEHENAS BR2_PACKAGE_NFS_UTILS \
 		BR2_PACKAGE_NFTABLES BR2_PACKAGE_SMARTMONTOOLS BR2_PACKAGE_UTIL_LINUX_FDISKS BR2_PACKAGE_UTIL_LINUX_WIPEFS; do
 		grep -q "^${sym}=y" "$OUT/.config" || echo "WARNING: $sym is not enabled in $OUT/.config"
 	done
@@ -75,17 +75,17 @@ if [ $# -gt 0 ]; then
 	exec make -C "$BR_DIR" O="$OUT" "$@"
 fi
 
-# rustnasd is a prebuilt binary: force a reinstall so changes are picked up.
-make -C "$BR_DIR" O="$OUT" rustnas-dirclean >/dev/null
+# hehenasd is a prebuilt binary: force a reinstall so changes are picked up.
+make -C "$BR_DIR" O="$OUT" hehenas-dirclean >/dev/null
 make -C "$BR_DIR" O="$OUT"
 
 # ---- 4. results --------------------------------------------------------------
 mkdir -p "$REPO/dist"
 if [ "$BOARD" = rpi3 ]; then
-	xz -T0 -9 -c "$OUT/images/rustnas-rpi3b-aarch64.img" > "$REPO/dist/rustnas-rpi3b-aarch64.img.xz"
-	cp "$OUT"/images/rustnas-rpi3b-update-*.tar "$REPO/dist/"
+	xz -T0 -9 -c "$OUT/images/hehenas-rpi3b-aarch64.img" > "$REPO/dist/hehenas-rpi3b-aarch64.img.xz"
+	cp "$OUT"/images/hehenas-rpi3b-update-*.tar "$REPO/dist/"
 else
-	cp "$OUT/images/rootfs.iso9660" "$REPO/dist/rustnas-x86_64.iso"
+	cp "$OUT/images/rootfs.iso9660" "$REPO/dist/hehenas-x86_64.iso"
 fi
 echo
 ls -lh "$REPO/dist"

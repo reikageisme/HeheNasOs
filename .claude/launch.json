@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "rustnas-preview",
+      "name": "hehenas-preview",
       "runtimeExecutable": "node",
       "runtimeArgs": ["dev/mock-server.mjs"],
       "port": 8080

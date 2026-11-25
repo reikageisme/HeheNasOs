@@ -1,6 +1,6 @@
 //! REST API. Everything except /api/auth/{status,setup,login,logout} and
 //! /api/network/confirm (token-protected) requires an admin session.
-//! Mutating requests must also carry `X-RustNAS: 1` (see web::csrf_guard).
+//! Mutating requests must also carry `X-HeheNAS: 1` (see web::csrf_guard).
 
 use std::time::Duration;
 
@@ -53,6 +53,9 @@ pub fn router(state: Shared) -> Router {
         .route("/api/system/restore", post(sys_restore).layer(DefaultBodyLimit::max(8 << 20)))
         .route("/api/system/update", get(update_status).put(update_upload))
         .route("/api/system/update/rollback", post(update_rollback))
+        .route("/api/system/update/check", post(update_check))
+        .route("/api/system/update/install", post(update_install))
+        .route("/api/system/update/settings", post(update_settings))
         .route("/api/settings", get(settings_get).post(settings_set))
         .route("/api/settings/regenerate-cert", post(settings_regen_cert))
         // storage
@@ -276,7 +279,7 @@ struct BackupQuery {
 async fn sys_backup(_: AuthUser, State(st): State<Shared>, Query(q): Query<BackupQuery>) -> Result<Response, ApiError> {
     let secrets = q.secrets == Some(1);
     let b = blocking(move || backup::create(&st.cfg, secrets)).await?;
-    let name = format!("rustnas-backup-{}-{}.json", b.hostname, b.created);
+    let name = format!("hehenas-backup-{}-{}.json", b.hostname, b.created);
     let body = serde_json::to_vec_pretty(&b).map_err(|e| ApiError::internal(e.to_string()))?;
     Ok((
         [
@@ -297,17 +300,133 @@ async fn sys_restore(AuthUser(user): AuthUser, State(st): State<Shared>, Json(b)
 
 // ---- updates ----------------------------------------------------------------
 
-async fn update_status(_: AuthUser, State(st): State<Shared>) -> Json<update::Status> {
-    Json(update::status(&st.cfg))
+async fn update_status(_: AuthUser, State(st): State<Shared>) -> Json<Value> {
+    let s = st.settings.lock().unwrap().clone();
+    let mut v = serde_json::to_value(update::status(&st.cfg)).unwrap_or_default();
+    v["online"] = serde_json::to_value(st.online.lock().unwrap().clone()).unwrap_or_default();
+    v["job"] = serde_json::to_value(st.job.lock().unwrap().clone()).unwrap_or_default();
+    v["auto_update"] = json!(s.auto_update);
+    v["update_hour"] = json!(s.update_hour);
+    v["tz_offset"] = json!(s.tz_offset);
+    v["clock_ok"] = json!(update::clock_ok());
+    Json(v)
+}
+
+async fn update_check(_: AuthUser, State(st): State<Shared>) -> ApiResult<update::Online> {
+    let st2 = st.clone();
+    let o = blocking(move || Ok(update::check(&st2.cfg))).await?;
+    *st.online.lock().unwrap() = o.clone();
+    Ok(Json(o))
+}
+
+/// Download + verify + stage the latest release in the background.
+async fn update_install(AuthUser(user): AuthUser, State(st): State<Shared>) -> ApiResult<Value> {
+    {
+        let o = st.online.lock().unwrap();
+        if !o.available {
+            return Err(ApiError::bad("Chưa có bản mới — bấm \"Kiểm tra\" trước"));
+        }
+    }
+    let busy = matches!(st.job.lock().unwrap().state.as_str(), "downloading" | "installing");
+    if busy {
+        return Err(ApiError::new(StatusCode::CONFLICT, "Đang cập nhật"));
+    }
+    crate::info!("OTA update requested by {user:?}");
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = ota_install(&st) {
+            crate::info!("OTA update failed: {e}");
+        }
+    });
+    Ok(ok())
+}
+
+#[derive(Deserialize)]
+struct UpdateSettings {
+    auto_update: String,
+    update_hour: u8,
+}
+
+async fn update_settings(_: AuthUser, State(st): State<Shared>, Json(u): Json<UpdateSettings>) -> ApiResult<Value> {
+    if !matches!(u.auto_update.as_str(), "off" | "notify" | "install") || u.update_hour > 23 {
+        return Err(ApiError::bad("Cài đặt không hợp lệ"));
+    }
+    let mut s = st.settings.lock().unwrap().clone();
+    s.auto_update = u.auto_update;
+    s.update_hour = u.update_hour;
+    let (st2, s2) = (st.clone(), s.clone());
+    blocking(move || s2.save(&st2.cfg)).await?;
+    *st.settings.lock().unwrap() = s;
+    Ok(ok())
+}
+
+/// Shared by the "Update now" button and automatic updates (blocking).
+pub fn ota_install(st: &Shared) -> Result<String, String> {
+    let o = st.online.lock().unwrap().clone();
+    let (Some(url), Some(version)) = (o.asset_url.clone(), o.latest.clone()) else {
+        return Err("Chưa có bản mới".into());
+    };
+    if !o.available {
+        return Err("Đang chạy bản mới nhất".into());
+    }
+    {
+        let mut j = st.job.lock().unwrap();
+        if matches!(j.state.as_str(), "downloading" | "installing") {
+            return Err("Đang cập nhật".into());
+        }
+        *j = update::Job { state: "downloading".into(), version: version.clone(), total: o.asset_size, ..Default::default() };
+    }
+    let res = (|| {
+        let path = update::bundle_path(&st.cfg, o.asset_size)?;
+        let dir = path.parent().unwrap_or(&path).to_path_buf();
+        if path.starts_with(&st.cfg.mount_root) {
+            privileged::call(&st.cfg, Op::PrepareDir { path: dir.to_string_lossy().into_owned() })?;
+        } else {
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        }
+        crate::info!("OTA: downloading {version} ({} bytes)", o.asset_size);
+        let st2 = st.clone();
+        update::download(&url, o.asset_size, &path, &|n| st2.job.lock().unwrap().downloaded = n)?;
+        st.job.lock().unwrap().state = "installing".into();
+        let r = privileged::call(&st.cfg, Op::UpdateApply { bundle: path.to_string_lossy().into_owned() });
+        let _ = std::fs::remove_file(&path);
+        r
+    })();
+    let mut j = st.job.lock().unwrap();
+    match &res {
+        Ok(_) => {
+            j.state = "staged".into();
+            crate::info!("OTA: {version} staged — reboot to switch");
+        }
+        Err(e) => {
+            j.state = "error".into();
+            j.error = Some(e.clone());
+        }
+    }
+    res
 }
 
 /// Stream the uploaded bundle to a data disk, then let the helper verify and
 /// write it to the inactive slot.
-async fn update_upload(AuthUser(user): AuthUser, State(st): State<Shared>, body: Body) -> ApiResult<Value> {
+async fn update_upload(
+    AuthUser(user): AuthUser,
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    body: Body,
+) -> ApiResult<Value> {
     let cfg = st.cfg.clone();
+    let len = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(300 << 20);
     let path = blocking(move || {
-        let p = update::bundle_path(&cfg)?;
-        privileged::call(&cfg, Op::PrepareDir { path: p.parent().unwrap_or(&p).to_string_lossy().into_owned() })?;
+        let p = update::bundle_path(&cfg, len)?;
+        let dir = p.parent().unwrap_or(&p).to_path_buf();
+        if p.starts_with(&cfg.mount_root) {
+            privileged::call(&cfg, Op::PrepareDir { path: dir.to_string_lossy().into_owned() })?;
+        } else {
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        }
         Ok(p)
     })
     .await?;
@@ -341,7 +460,16 @@ async fn settings_get(_: AuthUser, State(st): State<Shared>) -> Json<Value> {
     }))
 }
 
-async fn settings_set(_: AuthUser, State(st): State<Shared>, Json(s): Json<tls::Settings>) -> ApiResult<Value> {
+#[derive(Deserialize)]
+struct WebSettings {
+    https: bool,
+    http_redirect: bool,
+}
+
+async fn settings_set(_: AuthUser, State(st): State<Shared>, Json(w): Json<WebSettings>) -> ApiResult<Value> {
+    let mut s = st.settings.lock().unwrap().clone();
+    s.https = w.https;
+    s.http_redirect = w.http_redirect;
     let st2 = st.clone();
     let s2 = s.clone();
     blocking(move || s2.save(&st2.cfg)).await?;

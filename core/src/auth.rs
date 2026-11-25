@@ -25,7 +25,7 @@ use crate::{
     AppState, Shared,
 };
 
-pub const COOKIE: &str = "rustnas_session";
+pub const COOKIE: &str = "hehenas_session";
 const MAX_SESSIONS: usize = 32;
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -232,7 +232,7 @@ pub fn token_from(headers: &HeaderMap) -> Option<String> {
         .filter_map(|v| v.to_str().ok())
         .flat_map(|s| s.split(';'))
         .map(str::trim)
-        .find_map(|kv| kv.strip_prefix("rustnas_session="))
+        .find_map(|kv| kv.strip_prefix("hehenas_session="))
         .map(str::to_string)
 }
 
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn lockout() {
         let dir = std::env::temp_dir();
-        let a = AuthStore::load(&dir.join("nonexistent-rustnas"), 60).unwrap();
+        let a = AuthStore::load(&dir.join("nonexistent-hehenas"), 60).unwrap();
         let ip: IpAddr = "192.168.1.9".parse().unwrap();
         for _ in 0..MAX_FAILS {
             assert!(a.locked_for(ip).is_none());
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn cookie_parsing() {
         let mut h = HeaderMap::new();
-        h.insert(header::COOKIE, "a=1; rustnas_session=abc; b=2".parse().unwrap());
+        h.insert(header::COOKIE, "a=1; hehenas_session=abc; b=2".parse().unwrap());
         assert_eq!(token_from(&h).as_deref(), Some("abc"));
     }
 }

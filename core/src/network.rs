@@ -27,7 +27,7 @@ pub struct NetInfo {
 }
 
 pub fn hostname() -> String {
-    read_trim("/proc/sys/kernel/hostname").unwrap_or_else(|| "rustnas".into())
+    read_trim("/proc/sys/kernel/hostname").unwrap_or_else(|| "hehenas".into())
 }
 
 pub fn info() -> NetInfo {

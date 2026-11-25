@@ -18,7 +18,7 @@ use axum::{
 /// Log to stderr; on the device stderr is piped into syslog (`logger`).
 #[macro_export]
 macro_rules! info {
-    ($($arg:tt)*) => { eprintln!("rustnasd: {}", format_args!($($arg)*)) };
+    ($($arg:tt)*) => { eprintln!("hehenasd: {}", format_args!($($arg)*)) };
 }
 
 pub struct ApiError {

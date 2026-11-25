@@ -1,4 +1,4 @@
-//! Web file manager with a per-disk trash (`<disk>/.rustnas-trash`).
+//! Web file manager with a per-disk trash (`<disk>/.hehenas-trash`).
 //!
 //! Every path is confined to a mounted data disk below `mount_root`:
 //! normalised lexically (no `..`), then canonicalised and checked again so a
@@ -55,7 +55,7 @@ pub fn valid_name(n: &str) -> Result<(), String> {
         || n == ".."
         || n.contains('/')
         || n.chars().any(char::is_control)
-        || n.starts_with(".rustnas-")
+        || n.starts_with(".hehenas-")
     {
         return Err("Tên file không hợp lệ".into());
     }
@@ -75,7 +75,7 @@ pub fn resolve(cfg: &Config, p: &str) -> Result<(PathBuf, PathBuf), String> {
         let s = c.as_os_str();
         s == TRASH_DIR || s == UPDATE_DIR
     }) {
-        return Err("Thư mục hệ thống của RustNAS".into());
+        return Err("Thư mục hệ thống của HeheNAS".into());
     }
     Ok((real, mount))
 }
@@ -175,7 +175,7 @@ pub fn upload_target(cfg: &Config, dir: &str, name: &str, overwrite: bool) -> Re
     if target.symlink_metadata().is_ok_and(|m| m.is_dir() || m.file_type().is_symlink()) {
         return Err("Không ghi đè được thư mục/symlink".into());
     }
-    let part = real.join(format!(".{name}.rustnas-part"));
+    let part = real.join(format!(".{name}.hehenas-part"));
     Ok((target, part))
 }
 
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn names() {
         assert!(valid_name("phim 2024.mkv").is_ok());
-        for bad in ["", ".", "..", "a/b", ".rustnas-trash", "x\n"] {
+        for bad in ["", ".", "..", "a/b", ".hehenas-trash", "x\n"] {
             assert!(valid_name(bad).is_err(), "{bad:?}");
         }
     }

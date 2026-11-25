@@ -20,7 +20,7 @@ struct Def {
 }
 
 const SERVICES: &[Def] = &[
-    Def { id: "rustnasd", name: "RustNAS daemon", comms: &["rustnasd"], ctl: None },
+    Def { id: "hehenasd", name: "HeheNAS daemon", comms: &["hehenasd"], ctl: None },
     Def { id: "smb", name: "SMB server (ksmbd)", comms: &["ksmbd.mountd"], ctl: Some("smb") },
     Def { id: "nfs", name: "NFS server", comms: &["rpc.mountd", "nfsd"], ctl: Some("nfs") },
     Def { id: "network", name: "Mạng / DHCP", comms: &["udhcpc", "dhcpcd", "NetworkManager"], ctl: None },
@@ -89,7 +89,7 @@ pub fn rss(pid: &str) -> u64 {
 fn matches_source(line: &str, source: &str) -> bool {
     let has = |tags: &[&str]| tags.iter().any(|t| line.contains(t));
     match source {
-        "rustnasd" => has(&[" rustnasd", " rustnas:"]),
+        "hehenasd" => has(&[" hehenasd", " hehenas:"]),
         "smb" => has(&["ksmbd"]),
         "nfs" => has(&["nfsd", "rpc.mountd", "rpcbind", "exportfs"]),
         "network" => has(&["udhcpc", "ifup", "eth0", "nft"]),
@@ -112,10 +112,10 @@ pub fn tail(path: &Path, n: usize, source: &str, query: &str) -> Vec<String> {
 mod tests {
     #[test]
     fn log_sources() {
-        let l = "Nov 25 10:00:00 rustnas user.info rustnasd: listening";
-        assert!(super::matches_source(l, "rustnasd"));
+        let l = "Nov 25 10:00:00 hehenas user.info hehenasd: listening";
+        assert!(super::matches_source(l, "hehenasd"));
         assert!(!super::matches_source(l, "smb"));
-        assert!(super::matches_source("Nov 25 rustnas kern.info kernel: ksmbd: running", "smb"));
+        assert!(super::matches_source("Nov 25 hehenas kern.info kernel: ksmbd: running", "smb"));
         assert!(super::matches_source(l, "all"));
     }
 }

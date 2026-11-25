@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RustNAS</title>
+  <title>HeheNAS</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -13,26 +13,28 @@
 
   <div id="app" class="app" hidden>
     <header class="topbar">
+      <button class="icon-btn menu-toggle" id="menu-toggle" type="button" aria-label="Mở menu"></button>
       <a class="brand" href="#/overview">
-        <img src="/favicon.svg" alt="" width="22" height="22">
-        <span>RustNAS</span><small id="version"></small>
+        <img src="/favicon.svg" alt="" width="26" height="26">
+        <span class="brand-name">HeheNAS</span>
+        <span class="brand-os">OS</span>
       </a>
-      <span class="node"><span class="dot"></span><span id="node-name">rustnas</span></span>
+      <span class="node-pill"><span class="dot"></span><span id="node-name">hehenas</span><small id="version"></small></span>
       <span class="spacer"></span>
-      <a class="alert-pill" id="alert-pill" href="#/overview" hidden></a>
-      <span class="user" id="user-name"></span>
-      <button class="btn ghost" id="logout" type="button">Đăng xuất</button>
+      <div class="top-actions">
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="Đổi giao diện sáng/tối"></button>
+        <div class="dropdown" id="notif">
+          <button class="icon-btn" id="notif-btn" type="button" aria-label="Thông báo"><span class="badge" id="notif-badge" hidden></span></button>
+          <div class="dropdown-menu wide" id="notif-menu" hidden></div>
+        </div>
+        <div class="dropdown" id="user">
+          <button class="user-btn" id="user-btn" type="button"><span class="avatar" id="user-avatar">A</span><span id="user-name"></span></button>
+          <div class="dropdown-menu" id="user-menu" hidden></div>
+        </div>
+      </div>
     </header>
 
-    <nav class="nav" aria-label="Điều hướng">
-      <a href="#/overview" data-page="overview"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z"/></svg>Tổng quan</a>
-      <a href="#/storage" data-page="storage"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11zM6 16h.01M10 16h.01"/></svg>Ổ đĩa</a>
-      <a href="#/files" data-page="files"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Tệp</a>
-      <a href="#/shares" data-page="shares"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M16 6l-4-4-4 4M12 2v13"/></svg>Chia sẻ</a>
-      <a href="#/network" data-page="network"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>Mạng</a>
-      <a href="#/system" data-page="system"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>Hệ thống</a>
-    </nav>
-
+    <nav class="sidebar" id="sidebar" aria-label="Điều hướng"></nav>
     <main id="view" class="view"></main>
   </div>
 

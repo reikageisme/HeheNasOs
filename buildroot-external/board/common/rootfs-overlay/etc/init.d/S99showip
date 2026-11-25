@@ -6,7 +6,7 @@
 # (ASCII only: the Linux console font has no Vietnamese glyphs.)
 #
 
-CONF=/etc/rustnas/rustnasd.toml
+CONF=/etc/hehenas/hehenasd.toml
 port_of() { sed -n "s/^$1 *= *\".*:\([0-9]*\)\".*/\1/p" "$CONF" 2>/dev/null | head -n 1; }
 HTTPS_PORT=$(port_of https_listen); HTTPS_PORT=${HTTPS_PORT:-8443}
 HTTP_PORT=$(port_of listen); HTTP_PORT=${HTTP_PORT:-8080}
@@ -18,7 +18,7 @@ ips() {
 banner() {
 	printf '\n'
 	printf '  ==============================================================\n'
-	printf '    RustNAS OS  -  %s\n' "$(hostname)"
+	printf '    HeheNAS OS  -  %s\n' "$(hostname)"
 	printf '  ==============================================================\n\n'
 	if [ -n "$1" ]; then
 		printf '    Open a web browser and connect to:\n\n'
@@ -45,7 +45,7 @@ case "$1" in
 					banner "$cur" > /tmp/issue
 					cat /tmp/issue > /dev/console 2>/dev/null
 					cat /tmp/issue > /dev/tty1 2>/dev/null
-					[ -n "$cur" ] && logger -t rustnas "web UI: https://${cur%% *}:$HTTPS_PORT/"
+					[ -n "$cur" ] && logger -t hehenas "web UI: https://${cur%% *}:$HTTPS_PORT/"
 					last="$cur"
 				fi
 				sleep 10

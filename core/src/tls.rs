@@ -21,11 +21,17 @@ use crate::{config::Config, util};
 pub struct Settings {
     pub https: bool,
     pub http_redirect: bool,
+    /// "off", "notify" (check only) or "install" (download, stage, reboot).
+    pub auto_update: String,
+    /// Local hour (0-23) at which a staged update reboots the NAS.
+    pub update_hour: u8,
+    /// Hours east of UTC for update_hour (Vietnam = 7).
+    pub tz_offset: i8,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { https: true, http_redirect: true }
+        Self { https: true, http_redirect: true, auto_update: "install".into(), update_hour: 3, tz_offset: 7 }
     }
 }
 
@@ -50,7 +56,7 @@ fn paths(cfg: &Config) -> (PathBuf, PathBuf) {
 /// Create a new self-signed certificate for the current hostname and IPs.
 pub fn generate(cfg: &Config) -> Result<(), String> {
     let host = crate::network::hostname();
-    let mut names = vec![host.clone(), format!("{host}.local"), "rustnas".into(), "localhost".into()];
+    let mut names = vec![host.clone(), format!("{host}.local"), "hehenas".into(), "localhost".into()];
     for i in crate::network::info().interfaces {
         names.extend(i.ipv4.iter().filter_map(|a| a.split('/').next()).map(String::from));
     }

@@ -1,0 +1,20 @@
+config BR2_PACKAGE_HEHENAS
+	bool "hehenas"
+	help
+	  HeheNAS management daemon (hehenasd) with its embedded web
+	  dashboard, plus the init script for the ksmbd SMB server.
+
+	  hehenasd is cross-compiled outside Buildroot as a fully static
+	  <arch>-unknown-linux-musl binary (scripts/build-core.sh).
+
+if BR2_PACKAGE_HEHENAS
+
+config BR2_PACKAGE_HEHENAS_BOARD
+	string "board id"
+	default "x86_64" if BR2_x86_64
+	default "rpi3b"
+	help
+	  Selects files/hehenasd-<board>.toml and is checked against
+	  update bundles.
+
+endif

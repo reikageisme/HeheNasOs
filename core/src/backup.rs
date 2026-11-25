@@ -15,7 +15,7 @@ use crate::{
     util,
 };
 
-const FORMAT: &str = "rustnas-backup-1";
+const FORMAT: &str = "hehenas-backup-1";
 const PLAIN: &[&str] = &["shares.toml", "mounts.toml", "network.toml", "firewall.toml", "settings.toml"];
 const SECRET: &[&str] = &["auth.toml"];
 
@@ -55,7 +55,7 @@ pub fn create(cfg: &Config, secrets: bool) -> Result<Backup, String> {
 /// every subsystem re-reads its state.
 pub fn restore(cfg: &Config, b: &Backup) -> Result<(), String> {
     if b.format != FORMAT {
-        return Err("Không phải file sao lưu RustNAS".into());
+        return Err("Không phải file sao lưu HeheNAS".into());
     }
     for (name, content) in &b.files {
         if !PLAIN.contains(&name.as_str()) && !SECRET.contains(&name.as_str()) {
@@ -78,7 +78,7 @@ pub fn restore(cfg: &Config, b: &Backup) -> Result<(), String> {
     if netcfg::validate_hostname(&b.hostname).is_ok() {
         let _ = privileged::call(cfg, Op::SetHostname { name: b.hostname.clone() });
     }
-    // rustnasd applies network.toml at its next start (it restarts right
+    // hehenasd applies network.toml at its next start (it restarts right
     // after a restore) when this marker exists.
     let _ = std::fs::write(cfg.state_dir.join(".apply-network"), b"1");
     crate::info!("configuration restored from backup of {} ({})", b.hostname, b.version);

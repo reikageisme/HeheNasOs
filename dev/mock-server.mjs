@@ -1,6 +1,6 @@
-// RustNAS UI preview: serves ../frontend and a simulated API with demo data.
+// HeheNAS UI preview: serves ../frontend and a simulated API with demo data.
 // Runs on any OS with Node 18+, needs no packages, touches no real disks.
-//   node dev/mock-server.mjs            -> http://localhost:8080  (admin / rustnas123)
+//   node dev/mock-server.mjs            -> http://localhost:8080  (admin / hehenas123)
 //   PORT=9000 node dev/mock-server.mjs
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -15,9 +15,9 @@ const GB = 1024 ** 3;
 
 // ---------------------------------------------------------------- demo state
 const S = {
-  admin: { user: 'admin', pass: 'rustnas123' },
+  admin: { user: 'admin', pass: 'hehenas123' },
   sessions: new Set(),
-  hostname: 'rustnas',
+  hostname: 'hehenas',
   started: now() - 3 * 86400 - 5 * 3600,
   history: [],
   settings: { https: true, http_redirect: true },
@@ -36,7 +36,7 @@ const S = {
       { name: 'mmcblk0p1', fstype: 'vfat', label: 'boot', size: 64 * 2 ** 20, mountpoint: '/boot', total: 63 * 2 ** 20, used: 31 * 2 ** 20 },
       { name: 'mmcblk0p2', fstype: 'ext4', label: 'rootfs', size: 256 * 2 ** 20, mountpoint: '/', total: 240 * 2 ** 20, used: 141 * 2 ** 20 },
       { name: 'mmcblk0p3', fstype: 'ext4', label: 'rootfs', size: 256 * 2 ** 20 },
-      { name: 'mmcblk0p4', fstype: 'ext4', label: 'rustnas-data', size: 128 * 2 ** 20, mountpoint: '/var/lib/rustnas', total: 120 * 2 ** 20, used: 3 * 2 ** 20 },
+      { name: 'mmcblk0p4', fstype: 'ext4', label: 'hehenas-data', size: 128 * 2 ** 20, mountpoint: '/var/lib/hehenas', total: 120 * 2 ** 20, used: 3 * 2 ** 20 },
     ] },
     { name: 'sda', model: 'Samsung SSD 870 EVO', size: 500 * GB, transport: 'usb', rotational: false, system: false, parts: [
       { name: 'sda1', fstype: 'ext4', label: 'data', uuid: 'a1', size: 500 * GB, mountpoint: '/mnt/data', total: 492 * GB, used: 161 * GB },
@@ -52,7 +52,10 @@ const S = {
     sdc: { disk: 'sdc', available: false, message: 'Ổ không hỗ trợ SMART (hoặc hộp USB không chuyển tiếp lệnh)' },
   },
   trash: [],
-  update: { slots: { a: '1.0.0', b: '0.9.2' }, current_slot: 'a', trying: null },
+  update: { slots: { a: '1.1.0', b: '1.0.1' }, current_slot: 'a', trying: null },
+  online: { latest: '1.1.0', available: false, checked_at: now() - 3600, asset_size: 0, notes_url: 'https://github.com/reikageisme/HeheNasOs/releases' },
+  job: { state: 'idle' },
+  autoUpdate: { auto_update: 'install', update_hour: 3 },
 };
 
 // Virtual file tree for /mnt/data
@@ -84,19 +87,21 @@ function snapshot() {
   const total = 948 * 2 ** 20;
   const avail = total - (212 * 2 ** 20 + Math.random() * 8 * 2 ** 20);
   return {
-    hostname: S.hostname, model: 'Raspberry Pi 3 Model B Rev 1.2', kernel: '6.12.25-v8', version: '1.0.0',
+    hostname: S.hostname, model: 'Raspberry Pi 3 Model B Rev 1.2', kernel: '6.12.25-v8', version: '1.1.0',
     cpu_percent: cpu, cpu_cores: 4, load: [0.18 + cpu / 200, 0.22, 0.19],
     mem_total: total, mem_available: avail, mem_cached: 486 * 2 ** 20, swap_total: 384 * 2 ** 20, swap_free: 380 * 2 ** 20,
     temp_c: 51 + 3 * Math.sin(t / 40) + cpu / 20, uptime_secs: now() - S.started,
     net_rx_bps: rx, net_tx_bps: tx, daemon_rss: 6.4 * 2 ** 20, timestamp: now(),
+    cores: [0, 1, 2, 3].map((i) => Math.max(0, Math.min(100, cpu + (i - 1.5) * 4 + Math.random() * 8))),
+    disks: [{ name: 'mmcblk0', read_bps: Math.random() * 2e4, write_bps: Math.random() * 1e4 }, { name: 'sda', read_bps: Math.max(0, 8e6 + 6e6 * Math.sin(t / 13)), write_bps: Math.max(0, 1.5e6 * Math.cos(t / 9)) }],
   };
 }
 setInterval(() => {
   const s = snapshot();
-  S.history.push({ t: s.timestamp, cpu: s.cpu_percent, mem: s.mem_total - s.mem_available, rx: s.net_rx_bps, tx: s.net_tx_bps });
+  S.history.push({ t: s.timestamp, cpu: s.cpu_percent, mem: s.mem_total - s.mem_available, rx: s.net_rx_bps, tx: s.net_tx_bps, dr: s.disks.reduce((a, d) => a + d.read_bps, 0), dw: s.disks.reduce((a, d) => a + d.write_bps, 0) });
   if (S.history.length > 200) S.history.shift();
 }, 3000);
-for (let i = 0; i < 60; i++) S.history.push({ t: now() - (60 - i) * 3, cpu: 5 + Math.random() * 10, mem: 215e6, rx: 1e6 + Math.random() * 1e6, tx: 3e5 });
+for (let i = 0; i < 60; i++) S.history.push({ t: now() - (60 - i) * 3, cpu: 5 + Math.random() * 10, mem: 215e6, rx: 1e6 + Math.random() * 1e6, tx: 3e5, dr: 4e6 * Math.random(), dw: 1e6 * Math.random() });
 
 function disksJson() {
   return S.disks.map((d) => ({
@@ -125,17 +130,17 @@ function alerts() {
 }
 
 const LOGS = [
-  'Nov 25 08:00:01 rustnas syslog.info syslogd started: BusyBox v1.37.0',
-  'Nov 25 08:00:02 rustnas kern.info kernel: usb 1-1.2: new high-speed USB device number 4 using dwc_otg',
-  'Nov 25 08:00:03 rustnas kern.info kernel: sd 0:0:0:0: [sda] 976773168 512-byte logical blocks: (500 GB/466 GiB)',
-  'Nov 25 08:00:04 rustnas daemon.info udhcpc: lease of 192.168.1.42 obtained, lease time 86400',
-  'Nov 25 08:00:05 rustnas user.info rustnasd: web server running as uid 1000 (privilege-separated)',
-  'Nov 25 08:00:05 rustnas user.info rustnasd: RustNAS 1.0.0 — http://0.0.0.0:8080',
-  'Nov 25 08:00:05 rustnas user.info rustnasd: HTTPS on https://0.0.0.0:8443',
-  'Nov 25 08:00:06 rustnas user.info rustnasd: mounted /dev/sda1 at /mnt/data',
-  'Nov 25 08:00:06 rustnas kern.info kernel: ksmbd: kill command received',
-  'Nov 25 08:00:07 rustnas daemon.info ksmbd.mountd: Starting SMBD ksmbd-tools 3.5.3',
-  'Nov 25 09:12:44 rustnas user.info rustnasd: login "admin" from 192.168.1.20',
+  'Nov 25 08:00:01 hehenas syslog.info syslogd started: BusyBox v1.37.0',
+  'Nov 25 08:00:02 hehenas kern.info kernel: usb 1-1.2: new high-speed USB device number 4 using dwc_otg',
+  'Nov 25 08:00:03 hehenas kern.info kernel: sd 0:0:0:0: [sda] 976773168 512-byte logical blocks: (500 GB/466 GiB)',
+  'Nov 25 08:00:04 hehenas daemon.info udhcpc: lease of 192.168.1.42 obtained, lease time 86400',
+  'Nov 25 08:00:05 hehenas user.info hehenasd: web server running as uid 1000 (privilege-separated)',
+  'Nov 25 08:00:05 hehenas user.info hehenasd: HeheNAS 1.0.0 — http://0.0.0.0:8080',
+  'Nov 25 08:00:05 hehenas user.info hehenasd: HTTPS on https://0.0.0.0:8443',
+  'Nov 25 08:00:06 hehenas user.info hehenasd: mounted /dev/sda1 at /mnt/data',
+  'Nov 25 08:00:06 hehenas kern.info kernel: ksmbd: kill command received',
+  'Nov 25 08:00:07 hehenas daemon.info ksmbd.mountd: Starting SMBD ksmbd-tools 3.5.3',
+  'Nov 25 09:12:44 hehenas user.info hehenasd: login "admin" from 192.168.1.20',
 ];
 
 // ---------------------------------------------------------------- helpers
@@ -150,7 +155,7 @@ const readBody = (req) => new Promise((resolve) => {
   req.on('data', (c) => chunks.push(c));
   req.on('end', () => resolve(Buffer.concat(chunks)));
 });
-const cookieToken = (req) => (req.headers.cookie || '').split(';').map((s) => s.trim()).find((s) => s.startsWith('rustnas_session='))?.slice(16);
+const cookieToken = (req) => (req.headers.cookie || '').split(';').map((s) => s.trim()).find((s) => s.startsWith('hehenas_session='))?.slice(16);
 const authed = (req) => S.sessions.has(cookieToken(req));
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -159,7 +164,7 @@ async function handleApi(req, res, url) {
   const p = url.pathname;
   const m = req.method;
   const q = url.searchParams;
-  if (m !== 'GET' && req.headers['x-rustnas'] !== '1') return bad(res, 'Yêu cầu bị chặn (thiếu header X-RustNAS)', 403);
+  if (m !== 'GET' && req.headers['x-hehenas'] !== '1') return bad(res, 'Yêu cầu bị chặn (thiếu header X-HeheNAS)', 403);
 
   const raw = m === 'PUT' ? null : await readBody(req);
   let body = {};
@@ -167,14 +172,14 @@ async function handleApi(req, res, url) {
   await delay(120 + Math.random() * 180); // feel like a real Pi
 
   // public
-  if (p === '/api/auth/status') return send(res, 200, { setup_required: false, user: authed(req) ? S.admin.user : null, version: '1.0.0', hostname: S.hostname, secure: false, demo: true });
+  if (p === '/api/auth/status') return send(res, 200, { setup_required: false, user: authed(req) ? S.admin.user : null, version: '1.1.0', hostname: S.hostname, secure: false, demo: true });
   if (p === '/api/auth/login' && m === 'POST') {
     if (body.username !== S.admin.user || body.password !== S.admin.pass) { await delay(800); return bad(res, 'Sai tên đăng nhập hoặc mật khẩu', 401); }
     const tok = randomBytes(16).toString('hex');
     S.sessions.add(tok);
-    return send(res, 200, { ok: true, user: S.admin.user }, { 'Set-Cookie': `rustnas_session=${tok}; Path=/; HttpOnly; SameSite=Strict` });
+    return send(res, 200, { ok: true, user: S.admin.user }, { 'Set-Cookie': `hehenas_session=${tok}; Path=/; HttpOnly; SameSite=Strict` });
   }
-  if (p === '/api/auth/logout') { S.sessions.delete(cookieToken(req)); return send(res, 200, { ok: true }, { 'Set-Cookie': 'rustnas_session=; Path=/; Max-Age=0' }); }
+  if (p === '/api/auth/logout') { S.sessions.delete(cookieToken(req)); return send(res, 200, { ok: true }, { 'Set-Cookie': 'hehenas_session=; Path=/; Max-Age=0' }); }
   if (p === '/api/network/confirm' && m === 'POST') {
     if (!S.pending || body.token !== S.pending.token) return bad(res, 'Mã xác nhận không đúng hoặc đã hết hạn');
     if (S.pending.net) S.net = S.pending.net;
@@ -194,7 +199,7 @@ async function handleApi(req, res, url) {
   if (p === '/api/system/overview') return send(res, 200, snapshot());
   if (p === '/api/system/history') return send(res, 200, S.history);
   if (p === '/api/system/services') return send(res, 200, [
-    { id: 'rustnasd', name: 'RustNAS daemon', running: true, pids: [312, 318], rss_bytes: 9.1 * 2 ** 20, controllable: false },
+    { id: 'hehenasd', name: 'HeheNAS daemon', running: true, pids: [312, 318], rss_bytes: 9.1 * 2 ** 20, controllable: false },
     { id: 'smb', name: 'SMB server (ksmbd)', running: true, pids: [401, 402], rss_bytes: 3.2 * 2 ** 20, controllable: true },
     { id: 'nfs', name: 'NFS server', running: S.shares.nfs_enabled, pids: S.shares.nfs_enabled ? [455] : [], rss_bytes: 1.8 * 2 ** 20, controllable: true },
     { id: 'network', name: 'Mạng / DHCP', running: true, pids: [201], rss_bytes: 0.6 * 2 ** 20, controllable: false },
@@ -203,18 +208,21 @@ async function handleApi(req, res, url) {
   if (p.startsWith('/api/system/services/')) return ok(res);
   if (p === '/api/system/logs') {
     const src = q.get('source') || 'all', needle = (q.get('q') || '').toLowerCase();
-    const tags = { rustnasd: ['rustnasd'], smb: ['ksmbd'], network: ['udhcpc', 'eth0'], kernel: ['kernel:'], nfs: ['nfsd', 'rpc.'] }[src];
+    const tags = { hehenasd: ['hehenasd'], smb: ['ksmbd'], network: ['udhcpc', 'eth0'], kernel: ['kernel:'], nfs: ['nfsd', 'rpc.'] }[src];
     const lines = LOGS.filter((l) => (!tags || tags.some((t) => l.includes(t))) && (!needle || l.toLowerCase().includes(needle)));
     return send(res, 200, { file: '/var/log/messages', lines });
   }
   if (p === '/api/system/power') return ok(res);
   if (p === '/api/system/backup') {
-    const b = { format: 'rustnas-backup-1', version: '1.0.0', created: now(), hostname: S.hostname, secrets: q.get('secrets') === '1', files: { 'shares.toml': '# demo' } };
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="rustnas-backup-${S.hostname}.json"` });
+    const b = { format: 'hehenas-backup-1', version: '1.1.0', created: now(), hostname: S.hostname, secrets: q.get('secrets') === '1', files: { 'shares.toml': '# demo' } };
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="hehenas-backup-${S.hostname}.json"` });
     return res.end(JSON.stringify(b, null, 2));
   }
-  if (p === '/api/system/restore') return body.format === 'rustnas-backup-1' ? ok(res) : bad(res, 'Không phải file sao lưu RustNAS');
-  if (p === '/api/system/update' && m === 'GET') return send(res, 200, { supported: true, version: '1.0.0', board: 'rpi3b', ...S.update });
+  if (p === '/api/system/restore') return body.format === 'hehenas-backup-1' ? ok(res) : bad(res, 'Không phải file sao lưu HeheNAS');
+  if (p === '/api/system/update' && m === 'GET') return send(res, 200, { supported: true, version: '1.1.0', board: 'rpi3b', ...S.update, online: S.online, job: S.job, ...S.autoUpdate, tz_offset: 7, clock_ok: true });
+  if (p === '/api/system/update/check') { await delay(800); S.online.checked_at = now(); return send(res, 200, S.online); }
+  if (p === '/api/system/update/install') return bad(res, 'Đang dùng bản mới nhất');
+  if (p === '/api/system/update/settings') { S.autoUpdate = { auto_update: body.auto_update, update_hour: Number(body.update_hour) }; return ok(res); }
   if (p === '/api/system/update' && m === 'PUT') { await readBody(req); await delay(1500); return bad(res, 'Gói không hợp lệ: thiếu manifest.json ở đầu (bản xem thử)'); }
   if (p === '/api/system/update/rollback') return ok(res, { slot: 'b' });
   if (p === '/api/settings' && m === 'GET') return send(res, 200, { ...S.settings, http_port: 8080, https_port: 8443, fingerprint: '3A:91:7C:0E:44:B2:19:8D:FA:60:2C:7E:91:05:AB:CD:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00' });
@@ -267,7 +275,7 @@ async function handleApi(req, res, url) {
     if (!n || n.dir) return bad(res, 'Không tìm thấy file');
     const name = path.posix.basename(q.get('path'));
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}` });
-    return res.end(`Đây là file mẫu "${name}" từ bản xem thử RustNAS.\n`);
+    return res.end(`Đây là file mẫu "${name}" từ bản xem thử HeheNAS.\n`);
   }
   if (p === '/api/files/upload' && m === 'PUT') {
     const n = nodeAt(q.get('dir') || '');
@@ -387,4 +395,4 @@ createServer(async (req, res) => {
     console.error(e);
     if (!res.headersSent) bad(res, String(e), 500);
   }
-}).listen(PORT, () => console.log(`RustNAS preview: http://localhost:${PORT}  (admin / rustnas123)`));
+}).listen(PORT, () => console.log(`HeheNAS preview: http://localhost:${PORT}  (admin / hehenas123)`));

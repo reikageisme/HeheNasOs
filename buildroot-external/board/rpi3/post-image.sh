@@ -6,7 +6,7 @@ set -euo pipefail
 
 BOARD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$BOARD_DIR/../../.." && pwd)"
-GENIMAGE_CFG="${BUILD_DIR}/genimage-rustnas.cfg"
+GENIMAGE_CFG="${BUILD_DIR}/genimage-hehenas.cfg"
 FW="${BINARIES_DIR}/rpi-firmware"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO_DIR/core/Cargo.toml" | head -n1)
 
@@ -19,11 +19,11 @@ fi
 # --- A/B boot files: the slot is chosen by slot.txt (included from config.txt)
 sed -i '/^kernel=/d; /^include slot.txt/d' "$FW/config.txt"
 printf '\n# A/B slot selection (rewritten by updates)\ninclude slot.txt\n' >> "$FW/config.txt"
-BASE=$(sed 's#root=[^ ]*##; s#rustnas\.slot=[ab]##' "$FW/cmdline.txt" | tr -s ' ')
-printf 'root=/dev/mmcblk0p2 %s rustnas.slot=a\n' "$BASE" | tr -s ' ' > "$FW/cmdline-a.txt"
-printf 'root=/dev/mmcblk0p3 %s rustnas.slot=b\n' "$BASE" | tr -s ' ' > "$FW/cmdline-b.txt"
+BASE=$(sed 's#root=[^ ]*##; s#hehenas\.slot=[ab]##' "$FW/cmdline.txt" | tr -s ' ')
+printf 'root=/dev/mmcblk0p2 %s hehenas.slot=a\n' "$BASE" | tr -s ' ' > "$FW/cmdline-a.txt"
+printf 'root=/dev/mmcblk0p3 %s hehenas.slot=b\n' "$BASE" | tr -s ' ' > "$FW/cmdline-b.txt"
 printf 'kernel=Image-a\ncmdline=cmdline-a.txt\n' > "$FW/slot.txt"
-printf 'a = "%s"\nb = "%s"\n' "$VERSION" "$VERSION" > "$FW/rustnas-slots.toml"
+printf 'a = "%s"\nb = "%s"\n' "$VERSION" "$VERSION" > "$FW/hehenas-slots.toml"
 cp "${BINARIES_DIR}/Image" "${BINARIES_DIR}/Image-a"
 cp "${BINARIES_DIR}/Image" "${BINARIES_DIR}/Image-b"
 
@@ -31,11 +31,11 @@ cp "${BINARIES_DIR}/Image" "${BINARIES_DIR}/Image-b"
 SEED="${BUILD_DIR}/persist-seed"
 rm -rf "$SEED"
 mkdir -p "$SEED/etc" "$SEED/ksmbd"
-cp -a "${TARGET_DIR}/usr/share/rustnas/etc-default/." "$SEED/etc/"
+cp -a "${TARGET_DIR}/usr/share/hehenas/etc-default/." "$SEED/etc/"
 PERSIST="${BINARIES_DIR}/persist.ext4"
 rm -f "$PERSIST"
 truncate -s 128M "$PERSIST"
-"${HOST_DIR}/sbin/mkfs.ext4" -q -F -L rustnas-data -d "$SEED" "$PERSIST"
+"${HOST_DIR}/sbin/mkfs.ext4" -q -F -L hehenas-data -d "$SEED" "$PERSIST"
 
 # --- FAT boot partition contents
 FILES=()
@@ -61,6 +61,6 @@ cat > "$UPD/manifest.json" <<EOF
   "rootfs_sha256": "$(sha256sum "$UPD/rootfs.ext4.gz" | cut -d' ' -f1)"
 }
 EOF
-tar --format=ustar -C "$UPD" -cf "${BINARIES_DIR}/rustnas-rpi3b-update-${VERSION}.tar" manifest.json Image rootfs.ext4.gz
-echo "post-image: ${BINARIES_DIR}/rustnas-rpi3b-aarch64.img"
-echo "post-image: ${BINARIES_DIR}/rustnas-rpi3b-update-${VERSION}.tar"
+tar --format=ustar -C "$UPD" -cf "${BINARIES_DIR}/hehenas-rpi3b-update-${VERSION}.tar" manifest.json Image rootfs.ext4.gz
+echo "post-image: ${BINARIES_DIR}/hehenas-rpi3b-aarch64.img"
+echo "post-image: ${BINARIES_DIR}/hehenas-rpi3b-update-${VERSION}.tar"

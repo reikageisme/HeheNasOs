@@ -1,6 +1,6 @@
 //! Privilege separation.
 //!
-//! When rustnasd starts as root it forks: the parent becomes a tiny root
+//! When hehenasd starts as root it forks: the parent becomes a tiny root
 //! helper listening on a Unix socket, the child drops to `share_user` and
 //! runs the web server. The web process can only ask for the operations in
 //! [`Op`]; the helper re-validates every argument and builds all config files
