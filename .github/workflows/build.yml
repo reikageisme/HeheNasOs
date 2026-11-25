@@ -3,6 +3,8 @@ name: build
 on:
   push:
     branches: [main]
+    # Docs and release notes don't need a 1-2 h image build.
+    paths-ignore: ['**.md', '.github/release-notes.md', '.github/workflows/release.yml']
   pull_request:
   workflow_dispatch:
 
