@@ -1,0 +1,53 @@
+name: release
+
+# Push a tag like v1.0.0 after the build of that code has succeeded on main:
+# the images from that build are published as a GitHub Release (public
+# download, no login, no expiry). Nothing is rebuilt.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find the build to publish
+        run: |
+          # Prefer the build of this exact commit; otherwise the latest
+          # successful build on main (e.g. when only docs/CI files changed).
+          RUN=$(gh run list --workflow build.yml --commit "$GITHUB_SHA" --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -z "$RUN" ]; then
+            RUN=$(gh run list --workflow build.yml --branch main --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          fi
+          [ -n "$RUN" ] || { echo "::error::No successful build found"; exit 1; }
+          SHA=$(gh run view "$RUN" --json headSha -q .headSha)
+          echo "Publishing build $RUN (commit $SHA)"
+          echo "RUN=$RUN" >> "$GITHUB_ENV"
+          echo "BUILD_SHA=$SHA" >> "$GITHUB_ENV"
+
+      - name: Download images
+        run: |
+          gh run download "$RUN" -n rustnas-rpi3 -D dist
+          gh run download "$RUN" -n rustnas-x86_64 -D dist
+          gh run download "$RUN" -n rustnasd-binaries -D bin
+          cp "$(find bin -path '*aarch64*' -name rustnasd)" dist/rustnasd-aarch64
+          cp "$(find bin -path '*x86_64*' -name rustnasd)" dist/rustnasd-x86_64
+          cd dist
+          sha256sum * > SHA256SUMS
+          ls -lh
+
+      - name: Create release
+        run: |
+          sed -e "s/@VERSION@/$GITHUB_REF_NAME/g" \
+              -e "s/@RUN@/$RUN/g" \
+              -e "s/@SHA@/${BUILD_SHA:0:7}/g" \
+              .github/release-notes.md > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --title "RustNAS OS $GITHUB_REF_NAME" --notes-file notes.md
