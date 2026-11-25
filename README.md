@@ -85,9 +85,8 @@ scripts/  build-core.sh · build-image.sh · dev-run.sh · ci-annotate.py
 
 **Build tại máy** (Linux hoặc WSL2, cần khoảng 6 GB RAM và 15 GB ổ đĩa):
 ```bash
-sudo apt install build-essential git rsync bc cpio unzip wget file perl python3 patch xz-utils libncurses-dev
+sudo apt install build-essential git rsync bc cpio unzip wget file perl python3 patch xz-utils libncurses-dev gcc-aarch64-linux-gnu
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-pip install ziglang && cargo install cargo-zigbuild
 BOARD=rpi3 bash scripts/build-image.sh       # hoặc BOARD=x86_64
 ```
 
