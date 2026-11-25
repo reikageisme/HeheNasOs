@@ -2,7 +2,7 @@
 //! /api/network/confirm (token-protected) requires an admin session.
 //! Mutating requests must also carry `X-RustNAS: 1` (see web::csrf_guard).
 
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use axum::{
     body::Body,
@@ -165,7 +165,7 @@ async fn auth_setup(
 async fn auth_login(
     State(st): State<Shared>,
     Extension(sec): Extension<Secure>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(tls::Peer(peer)): ConnectInfo<tls::Peer>,
     Json(c): Json<Creds>,
 ) -> Result<Response, ApiError> {
     let ip = peer.ip();

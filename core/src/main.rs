@@ -24,7 +24,6 @@ mod web;
 
 use std::{
     collections::HashMap,
-    net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -237,7 +236,7 @@ async fn run(cfg: Config) -> Result<(), String> {
     let http = tokio::net::TcpListener::bind(&cfg.listen).await.map_err(|e| format!("bind {}: {e}", cfg.listen))?;
     let http_srv = axum::serve(
         http,
-        http_app.layer(Extension(web::Secure(false))).into_make_service_with_connect_info::<SocketAddr>(),
+        http_app.layer(Extension(web::Secure(false))).into_make_service_with_connect_info::<tls::Peer>(),
     )
     .with_graceful_shutdown(shutdown_signal());
     info!("RustNAS {} — http://{}", env!("CARGO_PKG_VERSION"), cfg.listen);
@@ -248,7 +247,7 @@ async fn run(cfg: Config) -> Result<(), String> {
         info!("HTTPS on https://{}", cfg.https_listen);
         let https_srv = axum::serve(
             tls_l,
-            app.layer(Extension(web::Secure(true))).into_make_service_with_connect_info::<SocketAddr>(),
+            app.layer(Extension(web::Secure(true))).into_make_service_with_connect_info::<tls::Peer>(),
         )
         .with_graceful_shutdown(shutdown_signal());
         let (a, b) = tokio::join!(http_srv, https_srv);

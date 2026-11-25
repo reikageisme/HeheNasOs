@@ -3,6 +3,7 @@
 
 use std::{io, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
+use axum::{extract::connect_info::Connected, serve::IncomingStream};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -89,6 +90,23 @@ pub fn fingerprint(cfg: &Config) -> Option<String> {
     let der = CertificateDer::pem_file_iter(&cert).ok()?.next()?.ok()?;
     let d = Sha256::digest(der.as_ref());
     Some(d.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":"))
+}
+
+/// Client address for `ConnectInfo`, available on both the plain TCP and the
+/// TLS listener (axum only provides `SocketAddr` for `TcpListener`).
+#[derive(Clone, Copy, Debug)]
+pub struct Peer(pub SocketAddr);
+
+impl Connected<IncomingStream<'_, TlsListener>> for Peer {
+    fn connect_info(stream: IncomingStream<'_, TlsListener>) -> Self {
+        Peer(*stream.remote_addr())
+    }
+}
+
+impl Connected<IncomingStream<'_, TcpListener>> for Peer {
+    fn connect_info(stream: IncomingStream<'_, TcpListener>) -> Self {
+        Peer(*stream.remote_addr())
+    }
 }
 
 /// TLS listener: handshakes run concurrently (max 32, 10 s each) so one slow
