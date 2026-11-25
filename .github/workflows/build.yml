@@ -67,9 +67,17 @@ jobs:
           for f in scripts/*.sh buildroot-external/board/*/*.sh; do bash -n "$f"; done
           for f in buildroot-external/package/rustnas/files/S60ksmbd buildroot-external/board/common/rootfs-overlay/etc/init.d/*; do sh -n "$f"; done
       - name: Cross-compile (aarch64 + x86_64, static musl)
+        shell: bash
         run: |
-          TARGET=aarch64-unknown-linux-musl bash scripts/build-core.sh
-          TARGET=x86_64-unknown-linux-musl bash scripts/build-core.sh
+          set +e
+          for t in aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
+            TARGET=$t bash scripts/build-core.sh 2>&1 | tee cross.log
+            s=${PIPESTATUS[0]}
+            if [ "$s" -ne 0 ]; then
+              grep -vE '^\s+(Compiling|Downloaded|Downloading)' cross.log | tail -40 | while IFS= read -r l; do echo "::error title=cross $t::$l"; done
+              exit $s
+            fi
+          done
       - name: Smoke test (x86_64 binary, dry-run)
         run: |
           mkdir -p dev/state

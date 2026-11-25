@@ -246,7 +246,7 @@ pub fn trash_list(cfg: &Config) -> Vec<TrashItem> {
             });
         }
     }
-    out.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+    out.sort_by_key(|a| std::cmp::Reverse(a.deleted_at));
     out
 }
 
@@ -272,7 +272,7 @@ pub fn trash_restore(cfg: &Config, mount: &str, id: &str) -> Result<String, Stri
     let orig = PathBuf::from(normalize_str(&meta.original)?);
     // The original must still be on the same disk.
     let disk = storage::data_mount_of(cfg, &orig).ok_or("Ổ gốc không còn mount")?;
-    if disk != PathBuf::from(normalize_str(mount)?) {
+    if disk.as_path() != Path::new(&normalize_str(mount)?) {
         return Err("Ổ gốc không khớp".into());
     }
     let parent = orig.parent().ok_or("Đường dẫn gốc không hợp lệ")?;
