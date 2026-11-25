@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_RUSTNAS_PATH/package/rustnas/Config.in"

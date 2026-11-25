@@ -1,0 +1,17 @@
+config BR2_PACKAGE_RUSTNAS
+	bool "rustnas"
+	help
+	  RustNAS management daemon (rustnasd) with its embedded web
+	  dashboard, plus the init script for the ksmbd SMB server.
+
+	  rustnasd is cross-compiled outside Buildroot as a fully static
+	  aarch64-unknown-linux-musl binary (scripts/build-core.sh), so it
+	  does not depend on the target C library.
+
+if BR2_PACKAGE_RUSTNAS
+
+config BR2_PACKAGE_RUSTNAS_BINARY
+	string "path to the prebuilt rustnasd binary"
+	default "$(BR2_EXTERNAL_RUSTNAS_PATH)/../core/target/aarch64-unknown-linux-musl/release/rustnasd"
+
+endif

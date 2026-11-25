@@ -1,0 +1,88 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Fast check: compile, lint and unit-test the Rust daemon, cross-compile for the Pi.
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal -c clippy
+          rustup default stable
+          rustup target add aarch64-unknown-linux-musl
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            core/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('core/Cargo.toml', 'core/Cargo.lock') }}
+      - name: Test
+        working-directory: core
+        run: cargo test
+      - name: Clippy
+        working-directory: core
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Frontend syntax
+        run: node --check frontend/app.js
+      - name: Shell syntax
+        run: |
+          for f in scripts/*.sh buildroot-external/board/rpi3/*.sh; do bash -n "$f"; done
+          for f in buildroot-external/package/rustnas/files/S60ksmbd buildroot-external/board/rpi3/rootfs-overlay/etc/init.d/*; do sh -n "$f"; done
+      - name: Cross-compile for Raspberry Pi 3B (aarch64 musl, static)
+        run: bash scripts/build-core.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustnasd-aarch64
+          path: core/target/aarch64-unknown-linux-musl/release/rustnasd
+
+  # Full OS image (Buildroot). Slow: run on main pushes and manual dispatch only.
+  image:
+    needs: core
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      RUSTNAS_WORK: ${{ github.workspace }}/../rustnas-build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space (Buildroot needs ~15 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af >/dev/null || true
+          df -h /
+      - name: Host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git rsync bc cpio unzip wget file perl python3 patch xz-utils libncurses-dev
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-unknown-linux-musl
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../rustnas-build/buildroot/dl
+          key: br-dl-${{ hashFiles('buildroot-external/configs/*', 'buildroot-external/board/rpi3/linux.fragment') }}
+          restore-keys: br-dl-
+      - name: Build image
+        run: bash scripts/build-image.sh
+      - name: Build info
+        if: always()
+        run: |
+          ls -lh dist/ || true
+          ls -lh "$RUSTNAS_WORK/output/images/" || true
+          grep -E '^BR2_(TOOLCHAIN_USES_MUSL|PACKAGE_KSMBD_TOOLS|PACKAGE_RUSTNAS|PACKAGE_RPI_FIRMWARE_CD|TOOLCHAIN_EXTERNAL_BOOTLIN)' "$RUSTNAS_WORK/output/.config" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustnas-rpi3b-aarch64
+          path: dist/rustnas-rpi3b-aarch64.img.xz
+          compression-level: 0

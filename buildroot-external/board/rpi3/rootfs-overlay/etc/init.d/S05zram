@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# Compressed swap in RAM (zram). On a 1 GB Pi this gives headroom for
+# bursts (many SMB clients, fsck of a big disk) without wearing the SD card.
+#
+
+SIZE_MB=384
+
+start() {
+	modprobe zram num_devices=1 2>/dev/null || return 0
+	[ -e /sys/block/zram0 ] || return 0
+	grep -q zram0 /proc/swaps && return 0
+	echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null || true
+	echo "${SIZE_MB}M" > /sys/block/zram0/disksize || return 0
+	i=0
+	while [ ! -b /dev/zram0 ] && [ $i -lt 5 ]; do sleep 1; i=$((i + 1)); done
+	if [ ! -b /dev/zram0 ]; then
+		mknod /dev/zram0 b $(tr ':' ' ' < /sys/block/zram0/dev)
+	fi
+	mkswap /dev/zram0 >/dev/null || return 0
+	swapon -p 100 /dev/zram0 2>/dev/null || swapon /dev/zram0
+	echo "zram swap: ${SIZE_MB} MB"
+}
+
+stop() {
+	swapoff /dev/zram0 2>/dev/null
+	echo 1 > /sys/block/zram0/reset 2>/dev/null
+}
+
+case "$1" in
+	start) start;;
+	stop) stop;;
+	restart) stop; start;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1;;
+esac

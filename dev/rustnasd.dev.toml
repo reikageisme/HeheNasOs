@@ -1,0 +1,10 @@
+# Development config: run from the repository root (scripts/dev-run.sh).
+listen = "0.0.0.0:8080"
+state_dir = "dev/state"
+mount_root = "/mnt"
+system_disk = "none"
+smb_conf = "dev/state/ksmbd.conf"
+smb_service = ""
+web_root = "frontend"     # edit frontend/*, then just reload the browser
+log_file = "/var/log/dpkg.log"
+dry_run = true

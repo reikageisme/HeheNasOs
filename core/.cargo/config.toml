@@ -1,0 +1,6 @@
+# Cross-compile a fully static binary for the Raspberry Pi 3B (ARM64).
+# rust-lld ships with rustup, so no separate C cross toolchain is needed
+# (all dependencies are pure Rust).
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "target-feature=+crt-static"]

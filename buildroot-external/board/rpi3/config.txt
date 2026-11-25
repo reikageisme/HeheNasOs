@@ -1,0 +1,17 @@
+# RustNAS - Raspberry Pi 3B firmware configuration
+# (Copied to the FAT boot partition: you can edit it from any PC.)
+
+start_file=start.elf
+fixup_file=fixup.dat
+kernel=Image
+arm_64bit=1
+
+# Headless NAS: give the GPU the minimum. Requires the cut-down firmware;
+# post-image.sh falls back to 64 MB if that firmware is not selected.
+gpu_mem=16
+disable_overscan=1
+
+# PL011 UART for the serial console; radios are unused on a wired NAS
+dtoverlay=disable-bt
+dtoverlay=disable-wifi
+dtparam=audio=off

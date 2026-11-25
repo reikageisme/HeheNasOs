@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RustNAS</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="auth" class="auth" hidden></div>
+
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <a class="brand" href="#/overview">
+        <img src="/favicon.svg" alt="" width="22" height="22">
+        <span>RustNAS</span><small id="version"></small>
+      </a>
+      <span class="node"><span class="dot"></span><span id="node-name">rustnas</span></span>
+      <span class="spacer"></span>
+      <span class="user" id="user-name"></span>
+      <button class="btn ghost" id="logout" type="button">Đăng xuất</button>
+    </header>
+
+    <nav class="nav" aria-label="Điều hướng">
+      <a href="#/overview" data-page="overview">Tổng quan</a>
+      <a href="#/storage" data-page="storage">Ổ đĩa</a>
+      <a href="#/shares" data-page="shares">Chia sẻ</a>
+      <a href="#/network" data-page="network">Mạng</a>
+      <a href="#/system" data-page="system">Hệ thống</a>
+    </nav>
+
+    <main id="view" class="view"></main>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

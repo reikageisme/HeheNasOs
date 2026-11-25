@@ -1,0 +1,29 @@
+#!/bin/sh
+#
+# Print the dashboard address on the HDMI/serial console once DHCP is done,
+# and put it in /etc/issue so the login prompt shows it too.
+#
+
+case "$1" in
+	start)
+		(
+			IP=""
+			for i in $(seq 1 60); do
+				IP=$(ip -4 addr show eth0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)
+				[ -n "$IP" ] && break
+				sleep 1
+			done
+			URL="http://${IP:-<chua-co-IP>}:8080"
+			MSG="RustNAS san sang: $URL"
+			echo "$MSG" > /dev/console 2>/dev/null
+			echo "$MSG" > /dev/tty1 2>/dev/null
+			logger -t rustnas "$MSG"
+			printf '\nRustNAS OS - web: %s\n\n' "$URL" > /etc/issue
+		) &
+		;;
+	stop|restart)
+		;;
+	*)
+		echo "Usage: $0 {start}"
+		exit 1;;
+esac

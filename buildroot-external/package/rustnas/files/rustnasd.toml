@@ -1,0 +1,13 @@
+# RustNAS daemon configuration
+listen = "0.0.0.0:8080"
+state_dir = "/var/lib/rustnas"        # persistent partition (mmcblk0p3)
+mount_root = "/mnt"                   # data disks are mounted at /mnt/<label>
+system_disk = "mmcblk0"               # the SD card; never mounted/formatted from the UI
+smb_conf = "/var/lib/rustnas/ksmbd/ksmbd.conf"   # /etc/ksmbd -> /var/lib/rustnas/ksmbd
+smb_service = "/etc/init.d/S60ksmbd"
+share_user = "nas"
+share_uid = 1000
+share_gid = 1000
+session_ttl_secs = 28800
+log_file = "/var/log/messages"
+dry_run = false
