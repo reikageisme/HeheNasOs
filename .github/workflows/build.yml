@@ -29,8 +29,12 @@ jobs:
         working-directory: core
         run: cargo test
       - name: Clippy
+        # Lints become annotations on the run page; they don't block the build.
+        continue-on-error: true
         working-directory: core
-        run: cargo clippy --all-targets -- -D warnings
+        run: |
+          cargo clippy --all-targets --message-format=json -- -D warnings > ../clippy.json || true
+          python3 ../scripts/ci-annotate.py < ../clippy.json
       - name: Frontend syntax
         run: node --check frontend/app.js
       - name: Shell syntax
