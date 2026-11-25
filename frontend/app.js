@@ -31,6 +31,32 @@ function svg(tag, attrs = {}) {
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
   return el;
 }
+const ICONS = {
+  cpu: 'M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM9 9h6v6H9z',
+  mem: 'M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2zM6 19v-3M10 19v-3M14 19v-3M18 19v-3M7 9v3M12 9v3M17 9v3',
+  temp: 'M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0z',
+  net: 'M22 12h-4l-3 9L9 3l-3 9H2',
+  disk: 'M22 12H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11zM6 16h.01M10 16h.01',
+};
+function icon(name, cls = 'ico') {
+  const el = svg('svg', { class: cls, viewBox: '0 0 24 24', 'aria-hidden': 'true' });
+  el.append(svg('path', { d: ICONS[name] || '' }));
+  return el;
+}
+const tone = (p) => (p >= 90 ? 'crit' : p >= 75 ? 'warn' : 'ok');
+/** Ring gauge (0-100). */
+function gauge(p, label) {
+  p = Math.min(100, Math.max(0, p || 0));
+  const r = 26, c = 2 * Math.PI * r;
+  const g = svg('svg', { class: `gauge ${tone(p)}`, viewBox: '0 0 64 64', role: 'img', 'aria-label': `${Math.round(p)}%` });
+  g.append(svg('circle', { class: 'track', cx: 32, cy: 32, r }));
+  g.append(svg('circle', { class: 'bar', cx: 32, cy: 32, r, 'stroke-dasharray': `${(p / 100) * c} ${c}`, transform: 'rotate(-90 32 32)' }));
+  const t = svg('text', { x: 32, y: 37, 'text-anchor': 'middle' });
+  t.textContent = label ?? `${Math.round(p)}%`;
+  g.append(t);
+  return g;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const tag = (text, kind = '') => h('span', { class: `tag ${kind}` }, text);
@@ -185,6 +211,7 @@ function sparkChart(series, max, fmt, names) {
   for (const y of [0.25, 0.5, 0.75]) s.append(svg('line', { class: 'grid-line', x1: 0, x2: W, y1: H * y, y2: H * y }));
   series.forEach((pts, i) => {
     const points = pts.map((v, j) => `${((j / (n - 1)) * W).toFixed(1)},${(H - 2 - (v / top) * (H - 4)).toFixed(1)}`).join(' ');
+    s.append(svg('polygon', { class: `a${i}`, points: `0,${H} ${points} ${W},${H}` }));
     s.append(svg('polyline', { class: `s${i}`, points }));
   });
   return h('div', {}, s, h('div', { class: 'legend' },
@@ -288,17 +315,27 @@ function route() {
 window.addEventListener('hashchange', () => { if (!location.hash.startsWith('#/confirm')) route(); });
 
 // ---- Overview -------------------------------------------------------------
-function card(title, value, meterEl, sub) {
-  return h('div', { class: 'card' }, h('div', { class: 'card-title' }, title), h('div', { class: 'card-value' }, value), meterEl, h('div', { class: 'card-sub' }, sub));
+function card({ ico, title, value, sub, pct: p, label }) {
+  return h('div', { class: `card stat ${p != null ? tone(p) : ''}` },
+    h('div', { class: 'stat-main' },
+      h('div', { class: 'card-title' }, h('span', { class: 'chip' }, icon(ico)), title),
+      h('div', { class: 'card-value' }, value),
+      h('div', { class: 'card-sub' }, sub)),
+    p != null && gauge(p, label));
 }
 
 function diskSummary(disks) {
   const parts = disks.flatMap((d) => d.partitions.map((p) => ({ d, p }))).filter(({ p }) => p.mountpoint && p.total_bytes);
   if (!parts.length) return h('p', { class: 'muted' }, 'Chưa có ổ nào được mount.');
-  return parts.map(({ d, p }) => h('div', { class: 'field' },
-    h('span', {}, `${p.label || p.name} `, h('code', {}, p.mountpoint), d.system ? ' (hệ thống)' : ''),
-    meter(pct(p.used_bytes, p.total_bytes)),
-    h('small', {}, `${fmtBytes(p.used_bytes)} đã dùng / ${fmtBytes(p.total_bytes)} · ${p.fstype || ''}`)));
+  return h('div', { class: 'disk-list' }, parts.map(({ d, p }) => {
+    const u = pct(p.used_bytes, p.total_bytes);
+    return h('div', { class: 'disk-row' },
+      h('span', { class: `chip${d.system ? '' : ' accent'}` }, icon('disk')),
+      h('div', { class: 'disk-info' },
+        h('div', { class: 'disk-head' }, h('strong', {}, p.label || p.name), h('code', {}, p.mountpoint), d.system && tag('hệ thống'), h('span', { class: `disk-pct ${tone(u)}` }, `${u}%`)),
+        meter(u),
+        h('small', {}, `${fmtBytes(p.used_bytes)} / ${fmtBytes(p.total_bytes)} · ${p.fstype || ''} · còn ${fmtBytes(p.total_bytes - p.used_bytes)}`)));
+  }));
 }
 
 async function pageOverview({ show, every }) {
@@ -312,11 +349,12 @@ async function pageOverview({ show, every }) {
     $('#version').textContent = `v${o.version}`;
     const memUsed = o.mem_total - o.mem_available;
     const t = o.temp_c;
+    const netPct = (o.net_rx_bps + o.net_tx_bps) / 125000; // % of 100 Mbit/s
     cards.replaceChildren(
-      card('CPU', `${o.cpu_percent.toFixed(0)}%`, meter(o.cpu_percent), `${o.cpu_cores} nhân · tải ${o.load.map((x) => x.toFixed(2)).join(' / ')}`),
-      card('Bộ nhớ', fmtBytes(memUsed), meter(pct(memUsed, o.mem_total)), `trên ${fmtBytes(o.mem_total)} · cache ${fmtBytes(o.mem_cached)}`),
-      card('Nhiệt độ', t != null ? `${t.toFixed(1)} °C` : '—', meter(t != null ? (t / 85) * 100 : 0), t >= 80 ? 'Quá nóng: CPU đang bị hạ xung' : 'Pi 3B hạ xung ở 80 °C'),
-      card('Mạng', `↓ ${fmtRate(o.net_rx_bps)}`, null, `↑ ${fmtRate(o.net_tx_bps)} · Ethernet tối đa ~11 MB/s`),
+      card({ ico: 'cpu', title: 'CPU', value: `${o.cpu_percent.toFixed(0)}%`, pct: o.cpu_percent, sub: `${o.cpu_cores} nhân · tải ${o.load.map((x) => x.toFixed(2)).join(' / ')}` }),
+      card({ ico: 'mem', title: 'Bộ nhớ', value: fmtBytes(memUsed), pct: pct(memUsed, o.mem_total), sub: `trên ${fmtBytes(o.mem_total)} · cache ${fmtBytes(o.mem_cached)}` }),
+      card({ ico: 'temp', title: 'Nhiệt độ', value: t != null ? `${t.toFixed(1)} °C` : '—', pct: t != null ? (t / 85) * 100 : null, label: t != null ? `${Math.round(t)}°` : '', sub: t >= 80 ? 'Quá nóng: CPU đang bị hạ xung' : 'Pi 3B hạ xung ở 80 °C' }),
+      card({ ico: 'net', title: 'Mạng', value: `↓ ${fmtRate(o.net_rx_bps)}`, pct: Math.min(100, netPct), label: `${Math.round(netPct)}%`, sub: `↑ ${fmtRate(o.net_tx_bps)} · vòng = % của 100 Mb/s` }),
     );
     cpuChart.replaceChildren(sparkChart([hist.map((p) => p.cpu)], 100, (v) => `${v.toFixed(0)}%`));
     netChart.replaceChildren(sparkChart([hist.map((p) => p.rx), hist.map((p) => p.tx)], null, fmtRate, ['Nhận', 'Gửi']));
@@ -330,12 +368,14 @@ async function pageOverview({ show, every }) {
   const [o, hist, d, al] = await Promise.all([api('/api/system/overview'), api('/api/system/history'), api('/api/storage/disks'), api('/api/alerts')]);
   draw(o, hist);
   alertsBox.replaceChildren(...al.map(alertBox));
+  const area = (cls, el) => { el.classList.add(cls); return el; };
   show(
     h('h1', {}, 'Tổng quan'), alertsBox, cards,
-    h('div', { class: 'grid2' }, panel('Tải CPU (10 phút)', cpuChart), panel('Lưu lượng mạng', netChart)),
-    h('div', { class: 'grid2' },
-      panel('Ổ đĩa', diskSummary(d.disks), h('a', { href: '#/storage', class: 'btn small' }, 'Quản lý')),
-      panel('Hệ thống', info)),
+    h('div', { class: 'ov-grid' },
+      area('ov-cpu', panel('Tải CPU (10 phút)', cpuChart)),
+      area('ov-net', panel('Lưu lượng mạng', netChart)),
+      area('ov-disk', panel('Ổ đĩa', diskSummary(d.disks), h('a', { href: '#/storage', class: 'btn small' }, 'Quản lý'))),
+      area('ov-sys', panel('Hệ thống', info))),
   );
   every(async () => {
     const [o2, h2] = await Promise.all([api('/api/system/overview'), api('/api/system/history')]);
@@ -429,7 +469,7 @@ async function pageStorage({ show }) {
   show(
     h('div', { class: 'page-head' }, h('h1', {}, 'Ổ đĩa'), h('button', { class: 'btn', onclick: reload }, 'Làm mới')),
     h('p', { class: 'muted' }, 'Dữ liệu NAS nên nằm trên ổ USB, thẻ nhớ chỉ chứa hệ điều hành. Ổ HDD 2.5" nên cắm qua hub USB có nguồn riêng. Ổ đã mount sẽ tự mount lại sau khi khởi động (có kiểm tra lỗi filesystem trước).'),
-    blocks.length ? blocks : h('div', { class: 'alert' }, 'Không tìm thấy ổ đĩa nào.'),
+    blocks.length ? h('div', { class: 'grid-wide' }, blocks) : h('div', { class: 'alert' }, 'Không tìm thấy ổ đĩa nào.'),
   );
 }
 
@@ -633,13 +673,14 @@ async function pageShares({ show }) {
       h('button', { class: 'btn primary', onclick: () => shareDialog(null, data, mounts, reload) }, '+ Thêm chia sẻ')),
     !mounts.length && h('div', { class: 'alert' }, 'Chưa có ổ dữ liệu nào được mount. Vào ', h('a', { href: '#/storage' }, 'Ổ đĩa'), ' để mount trước.'),
     panel('Thư mục chia sẻ', table(['Tên', 'Thư mục', 'Quyền', 'Giao thức', 'Địa chỉ', ''], shareRows, 'Chưa có thư mục chia sẻ nào.'), nfsToggle),
-    panel('Người dùng SMB', table(['Tên', ''], userRows, 'Chưa có người dùng SMB nào.'),
-      h('button', { class: 'btn small primary', onclick: () => userDialog(null, reload) }, '+ Thêm người dùng')),
-    panel('Cách kết nối', h('ul', { class: 'help' },
+    h('div', { class: 'grid2' },
+      panel('Người dùng SMB', table(['Tên', ''], userRows, 'Chưa có người dùng SMB nào.'),
+        h('button', { class: 'btn small primary', onclick: () => userDialog(null, reload) }, '+ Thêm người dùng')),
+      panel('Cách kết nối', h('ul', { class: 'help' },
       h('li', {}, 'Windows: File Explorer → gõ ', h('code', {}, `\\\\${ip}`)),
       h('li', {}, 'macOS: Finder → Go → Connect to Server → ', h('code', {}, `smb://${ip}`)),
       h('li', {}, 'Linux: ', h('code', {}, `smb://${ip}/<tên>`), ' hoặc NFS: ', h('code', {}, `mount -t nfs ${ip}:/mnt/<ổ>/<thư mục> /mnt/x`)),
-      h('li', {}, 'Android/iOS: ứng dụng quản lý file có hỗ trợ SMB.'))),
+      h('li', {}, 'Android/iOS: ứng dụng quản lý file có hỗ trợ SMB.')))),
   );
 }
 
