@@ -41,8 +41,9 @@ pub struct FwConfig {
 
 impl Default for FwConfig {
     fn default() -> Self {
+        // On by default: only private (LAN) ranges can reach the NAS at all.
         Self {
-            enabled: false,
+            enabled: true,
             allowed: vec!["192.168.0.0/16".into(), "10.0.0.0/8".into(), "172.16.0.0/12".into()],
             smb: true,
             nfs: true,

@@ -30,7 +30,9 @@ Hệ điều hành NAS siêu nhẹ, phần quản lý viết bằng **Rust**, t�
 - Có các header CSP chặt, `X-Frame-Options: DENY`, `nosniff`, HSTS (khi chạy HTTPS), `no-store` cho API.
 - Mount ổ dữ liệu với `nodev,nosuid` (và `noexec` cho FAT/NTFS). SMB: tối thiểu SMB2.1, `restrict anonymous`, ẩn thư mục rác. NFS: `all_squash`, chỉ cho phép theo dải mạng.
 - Rootfs **chỉ-đọc**, trạng thái nằm trên phân vùng riêng.
-- Mặc định **không có SSH**. Root trên console chưa có mật khẩu, tiện debug qua HDMI hoặc serial; hãy đặt `BR2_TARGET_GENERIC_ROOT_PASSWD` nếu đặt máy ở nơi người khác chạm vào được.
+- **Firewall bật sẵn**: chỉ các dải mạng nội bộ (192.168.x.x, 10.x.x.x, 172.16–31.x.x) mới vào được NAS.
+- **Không có tài khoản đăng nhập console** (root bị khóa), không SSH, không telnet. Màn hình chỉ hiện địa chỉ web. Muốn có root console để debug thì build với `RUSTNAS_ROOT_CONSOLE=1`.
+- sysctl cứng hóa: `kptr_restrict`, `dmesg_restrict`, `protected_*`, chặn ICMP redirect và source route, `rp_filter`, SYN cookies, tắt IP forwarding.
 
 ## Kiến trúc
 
@@ -95,7 +97,15 @@ BOARD=rpi3 bash scripts/build-image.sh       # hoặc BOARD=x86_64
 **Raspberry Pi 3B**
 1. Flash `rustnas-rpi3b-aarch64.img.xz` bằng Raspberry Pi Imager (chọn *Use custom*) hoặc balenaEtcher. **Việc này xóa sạch thẻ nhớ.**
 2. Cắm dây mạng và ổ USB, rồi cấp nguồn 5V/2.5A. Ổ HDD 2.5" nên cắm qua hub USB có nguồn riêng.
-3. Địa chỉ web hiện lên màn hình HDMI. Mở địa chỉ đó, bỏ qua cảnh báo chứng chỉ tự ký, rồi **tạo tài khoản admin ngay**.
+3. Giống Proxmox, khi boot xong màn hình HDMI (và cổng serial) hiện khung:
+   ```
+     ==============================================================
+       RustNAS OS  -  rustnas
+     ==============================================================
+       Open a web browser and connect to:
+           https://192.168.1.42:8443/
+   ```
+   Mở địa chỉ đó, bỏ qua cảnh báo chứng chỉ tự ký, rồi **tạo tài khoản admin ngay**. Khung này tự cập nhật nếu IP thay đổi.
 
 **PC x86_64**: ghi `rustnas-x86_64.iso` ra USB bằng balenaEtcher hoặc Rufus (chế độ DD), rồi boot từ USB. Hệ thống chạy trong RAM. Muốn cấu hình được giữ lại sau khi tắt máy, hãy tạo một phân vùng ext4 có nhãn `rustnas-data` trên một ổ bất kỳ.
 

@@ -1,24 +1,55 @@
 #!/bin/sh
 #
-# Print the dashboard address on the HDMI/serial console once DHCP is done,
-# and put it in /etc/issue so the login prompt shows it too.
+# Proxmox-style console banner: tells you where to open the web UI.
+# Shown on HDMI (tty1), the serial console and above the login prompt
+# (/etc/issue -> /tmp/issue); refreshed whenever the IP address changes.
+# (ASCII only: the Linux console font has no Vietnamese glyphs.)
 #
+
+CONF=/etc/rustnas/rustnasd.toml
+port_of() { sed -n "s/^$1 *= *\".*:\([0-9]*\)\".*/\1/p" "$CONF" 2>/dev/null | head -n 1; }
+HTTPS_PORT=$(port_of https_listen); HTTPS_PORT=${HTTPS_PORT:-8443}
+HTTP_PORT=$(port_of listen); HTTP_PORT=${HTTP_PORT:-8080}
+
+ips() {
+	ip -4 addr show scope global 2>/dev/null | sed -n 's/^ *inet \([0-9.]*\)\/.*/\1/p'
+}
+
+banner() {
+	printf '\n'
+	printf '  ==============================================================\n'
+	printf '    RustNAS OS  -  %s\n' "$(hostname)"
+	printf '  ==============================================================\n\n'
+	if [ -n "$1" ]; then
+		printf '    Open a web browser and connect to:\n\n'
+		for ip in $1; do
+			printf '        https://%s:%s/\n' "$ip" "$HTTPS_PORT"
+		done
+		printf '\n    (plain HTTP on port %s redirects there; accept the\n' "$HTTP_PORT"
+		printf '     self-signed certificate warning on the first visit)\n'
+	else
+		printf '    Waiting for network (DHCP)... check the Ethernet cable.\n'
+	fi
+	printf '\n    Console login is disabled: manage this NAS from the web UI.\n'
+	printf '    Forgot the password? See "Khoi phuc" in the README.\n'
+	printf '  ==============================================================\n\n'
+}
 
 case "$1" in
 	start)
 		(
-			IP=""
-			for i in $(seq 1 60); do
-				IP=$(ip -4 addr show eth0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)
-				[ -n "$IP" ] && break
-				sleep 1
+			last="unset"
+			while :; do
+				cur=$(ips | tr '\n' ' ' | sed 's/ *$//')
+				if [ "$cur" != "$last" ]; then
+					banner "$cur" > /tmp/issue
+					cat /tmp/issue > /dev/console 2>/dev/null
+					cat /tmp/issue > /dev/tty1 2>/dev/null
+					[ -n "$cur" ] && logger -t rustnas "web UI: https://${cur%% *}:$HTTPS_PORT/"
+					last="$cur"
+				fi
+				sleep 10
 			done
-			URL="http://${IP:-<chua-co-IP>}:8080"
-			MSG="RustNAS san sang: $URL"
-			echo "$MSG" > /dev/console 2>/dev/null
-			echo "$MSG" > /dev/tty1 2>/dev/null
-			logger -t rustnas "$MSG"
-			printf '\nRustNAS OS - web: %s\n\n' "$URL" > /etc/issue
 		) &
 		;;
 	stop|restart)

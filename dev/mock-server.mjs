@@ -29,7 +29,7 @@ const S = {
     ],
   },
   net: { mode: 'dhcp', address: '', gateway: '', dns: [] },
-  fw: { enabled: false, allowed: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'], smb: true, nfs: true },
+  fw: { enabled: true, allowed: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'], smb: true, nfs: true },
   pending: null,
   disks: [
     { name: 'mmcblk0', model: 'SD SC32G', size: 32 * GB, transport: 'sd', rotational: false, system: true, parts: [

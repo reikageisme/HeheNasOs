@@ -84,5 +84,18 @@ EOF
 	;;
 esac
 
+# --- appliance hardening ----------------------------------------------------
+# No password logins at all: root is locked (the console only shows the web
+# address). Administration happens in the web UI; recovery uses flag files
+# on the boot partition. Set RUSTNAS_ROOT_CONSOLE=1 when building to keep a
+# passwordless root console for debugging.
+if [ "${RUSTNAS_ROOT_CONSOLE:-0}" != 1 ] && [ -f "$TARGET_DIR/etc/shadow" ]; then
+	sed -i 's/^root:[^:]*:/root:*:/' "$TARGET_DIR/etc/shadow"
+fi
+chmod 0600 "$TARGET_DIR/etc/shadow" 2>/dev/null || true
+# Remove tools an appliance does not need that help an attacker.
+rm -f "$TARGET_DIR/usr/bin/telnet" "$TARGET_DIR/usr/sbin/telnetd" "$TARGET_DIR/usr/bin/ftpget" "$TARGET_DIR/usr/bin/ftpput" \
+	"$TARGET_DIR/usr/sbin/httpd" "$TARGET_DIR/usr/bin/nc" "$TARGET_DIR/bin/nc"
+
 # Files from a Windows checkout may have lost their executable bit.
 chmod 0755 "$TARGET_DIR"/etc/init.d/S* 2>/dev/null || true
