@@ -145,6 +145,8 @@ fn partition(name: &str, sys: &Path, mounts: &[MountInfo], blk: &BlkInfo) -> Par
 }
 
 /// (total, used) bytes of a mounted filesystem.
+// statvfs field types are u64 on 64-bit Linux but u32 on some 32-bit targets.
+#[allow(clippy::useless_conversion)]
 fn fs_usage(path: &str) -> Option<(u64, u64)> {
     let c = CString::new(path).ok()?;
     // SAFETY: statvfs fills the zeroed struct; c is a valid NUL-terminated path.
