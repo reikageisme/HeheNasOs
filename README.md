@@ -1,159 +1,114 @@
 # RustNAS OS
 
-Hệ điều hành NAS siêu nhẹ cho **Raspberry Pi 3B (1 GB RAM)**. Bạn flash thẻ nhớ, cắm dây mạng, bật nguồn, rồi mở `http://<IP>:8080` để quản lý ổ đĩa, thư mục chia sẻ SMB, người dùng, mạng và dịch vụ. Cách dùng giống Proxmox/OpenMediaVault nhưng tốn ít RAM hơn nhiều.
+Hệ điều hành NAS siêu nhẹ, phần quản lý viết bằng **Rust**, tối ưu cho **Raspberry Pi 3B (1 GB RAM)**, có thêm bản **ISO x86_64** cho PC. Bạn flash thẻ nhớ, cắm dây mạng, bật nguồn, rồi mở `https://<IP>:8443` (hoặc `http://<IP>:8080`, sẽ tự chuyển sang HTTPS) để quản lý ổ đĩa, file, chia sẻ SMB/NFS, mạng, firewall, cập nhật và sao lưu.
 
-- Nền: Linux tối giản dựng bằng **Buildroot** (BusyBox init, musl).
-- Phần quản lý: một daemon **Rust** duy nhất là `rustnasd` (Axum, Tokio chạy 1 luồng). Daemon phục vụ cả REST API lẫn giao diện web nhúng sẵn trong file thực thi.
-- Chia sẻ file: **ksmbd**, server SMB3 chạy trong kernel.
-- Trạng thái hiện tại: **v0.1 alpha**. Code đã đủ phần chính, nhưng **chưa được build và chạy thử trên Pi thật** (xem mục [Cần kiểm chứng](#cần-kiểm-chứng-trên-phần-cứng-thật)).
+> **Xem giao diện ngay trên Windows/macOS/Linux**, không cần Rust hay Pi:
+> ```powershell
+> node dev/mock-server.mjs
+> ```
+> Rồi mở http://localhost:8080 và đăng nhập bằng `admin` / `rustnas123`. Đây là bản giả lập: giao diện thật, API mô phỏng với dữ liệu mẫu, không đụng tới ổ đĩa nào.
 
-## Hướng đã chọn: NAS chuyên dụng
+## Tính năng
 
-Bản này tập trung làm NAS cho Pi 3B. Không có Docker, VM, ZFS hay RAID5/6. Danh sách dịch vụ trong `system.rs` và cấu trúc module vẫn để chỗ cho việc mở rộng thành server đa năng ở các bản sau.
-
-## Thay đổi so với tài liệu nghiên cứu ban đầu
-
-| Tài liệu đề xuất | Bản này dùng | Lý do |
-|---|---|---|
-| File `.iso` | `rustnas-rpi3b-aarch64.img.xz` | Pi 3B khởi động bằng firmware trên phân vùng FAT, không boot được ISO kiểu PC. Bản ISO x86_64 để dành cho sau này. |
-| Samba (25–65 MB RAM) | **ksmbd** (vài MB) | SMB3 chạy trong kernel, cấu hình cùng cú pháp `smb.conf`. Trên máy 1 GB RAM thì đây là khoản tiết kiệm lớn nhất. |
-| Biên dịch Rust trong Buildroot | Biên dịch riêng thành **binary tĩnh musl** | Không phụ thuộc toolchain hay libc của Buildroot. Chỉ cần `rustup`, việc link do `rust-lld` lo. |
-| `gpu_mem` mặc định (~76–100 MB) | `gpu_mem=16` + firmware rút gọn | NAS không có màn hình nên trả khoảng 60–80 MB lại cho hệ thống. |
-| (không có) | **zram swap** 384 MB | Có thêm khoảng trống khi tải tăng đột ngột mà không làm mòn thẻ SD. |
-| (không có) | Phân vùng `persist` riêng (p3) | Tài khoản, cấu hình share và DB mật khẩu SMB nằm tách khỏi rootfs, sau này dễ làm rootfs chỉ-đọc hoặc cập nhật A/B. |
-| Script init | `rustnasd` chạy dưới `respawn` của init | Daemon tự khởi động lại nếu bị crash, đáp ứng yêu cầu chạy 24/7. |
-
-## Ngân sách RAM dự kiến (chưa đo trên máy thật)
-
-| Thành phần | Ước tính |
+| Nhóm | Có gì |
 |---|---|
-| Kernel + BusyBox + udhcpc + syslogd | 40–70 MB |
-| rustnasd (khi rảnh) | 3–8 MB |
-| ksmbd + ksmbd.mountd | 3–10 MB |
-| Tổng khi không có tải | **~50–90 MB** |
-
-Ngân sách trong tài liệu gốc là 130–270 MB. RAM còn trống được dùng làm page cache cho việc truyền file. Trang **Tổng quan** và **Hệ thống** hiển thị RAM thực tế của từng dịch vụ, nên bạn có thể đo trực tiếp ngay trên Pi.
-
-## Cấu trúc thư mục
-
-```
-core/                     daemon Rust (rustnasd)
-  src/main.rs             khởi động, runtime, tự mount lại ổ
-  src/api.rs              các endpoint REST
-  src/auth.rs             tài khoản admin (argon2id), session cookie
-  src/monitor.rs          CPU/RAM/nhiệt độ/mạng từ /proc, lịch sử 10 phút
-  src/storage.rs          liệt kê ổ (/sys/block), mount/unmount/format ext4
-  src/shares.rs           chia sẻ SMB + người dùng, sinh ksmbd.conf
-  src/network.rs          card mạng, gateway, DNS, đổi tên máy
-  src/system.rs           dịch vụ, log, RAM theo tiến trình
-  src/web.rs              phục vụ giao diện web nhúng
-frontend/                 giao diện web: HTML/CSS/JS thuần, không cần bước build
-buildroot-external/       cây BR2_EXTERNAL
-  configs/rustnas_rpi3.fragment   gộp lên raspberrypi3_64_defconfig
-  board/rpi3/             config.txt, cmdline, kernel fragment, genimage, hook
-  board/rpi3/rootfs-overlay/      zram, sysctl, hiện IP lên màn hình
-  package/rustnas/        đóng gói rustnasd + init script ksmbd
-scripts/
-  build-core.sh           biên dịch chéo rustnasd cho aarch64
-  build-image.sh          build toàn bộ image thẻ nhớ
-  dev-run.sh              chạy daemon trên PC (dry-run) để làm giao diện
-dev/rustnasd.dev.toml     cấu hình cho môi trường phát triển
-```
-
-## Build image (Windows dùng WSL2)
-
-1. **Tăng RAM cho WSL.** Hiện WSL Ubuntu trên máy này chỉ có khoảng 400 MB, không đủ để build GCC. Tạo file `%UserProfile%\.wslconfig` với nội dung:
-
-   ```ini
-   [wsl2]
-   memory=6GB
-   processors=4
-   ```
-
-   Rồi chạy lệnh:
-
-   ```powershell
-   wsl --shutdown
-   ```
-
-2. **Cài công cụ trong Ubuntu:**
-
-   ```bash
-   sudo apt install build-essential git rsync bc cpio unzip wget file perl python3 patch xz-utils libncurses-dev
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
-
-3. **Build** (lần đầu mất 1–3 giờ và khoảng 15 GB ổ đĩa, vì Buildroot tự dựng toolchain, kernel và firmware):
-
-   ```bash
-   cd /mnt/d/HeheNasOs
-   bash scripts/build-image.sh
-   ```
-
-   Script sẽ chép mã nguồn sang `~/rustnas-build` (ổ ext4 của WSL nên nhanh hơn `/mnt/d`), biên dịch `rustnasd`, tải Buildroot `2025.02.x` (bản LTS), gộp cấu hình và build. Kết quả nằm ở `dist/rustnas-rpi3b-aarch64.img.xz`.
-
-   Muốn chỉnh tùy chọn thì chạy `bash scripts/build-image.sh menuconfig` hoặc `... linux-menuconfig`.
-
-## Cài lên Pi 3B
-
-1. Flash file `.img.xz` bằng Raspberry Pi Imager (chọn *Use custom*) hoặc balenaEtcher. Thẻ 4 GB trở lên là đủ.
-2. Cắm dây mạng và ổ USB, rồi cấp nguồn 5V/2.5A. Ổ HDD 2.5" nên cắm qua hub USB có nguồn riêng.
-3. Sau khoảng 20–40 giây, địa chỉ web hiện lên màn hình HDMI hoặc cổng serial. Bạn cũng có thể xem IP trong trang quản lý của router.
-4. Mở `http://<IP>:8080` và **tạo tài khoản quản trị ngay**. Người đầu tiên mở trang sẽ thành quản trị viên.
-5. Vào **Ổ đĩa** để Mount (hoặc Format sang ext4) ổ USB. Vào **Chia sẻ** để tạo người dùng SMB và thư mục chia sẻ. Trên Windows, mở `\\<IP>` để kết nối.
-
-## Phát triển giao diện trên PC
-
-Trong WSL hoặc Linux, chạy:
-
-```bash
-bash scripts/dev-run.sh      # http://localhost:8080
-```
-
-Ở chế độ `dry_run`, các lệnh mount, mkfs và ksmbd chỉ được ghi log chứ không thực thi. Giao diện được đọc thẳng từ `frontend/`, nên sửa file xong chỉ cần tải lại trình duyệt. Muốn chạy test thì dùng `cargo test --manifest-path core/Cargo.toml`.
-
-## REST API
-
-Mọi endpoint đều yêu cầu đăng nhập, trừ `/api/auth/status|setup|login|logout`. Session lưu trong cookie `HttpOnly; SameSite=Strict`.
-
-| Phương thức | Đường dẫn | Chức năng |
-|---|---|---|
-| GET | `/api/auth/status` | cần setup lần đầu không, ai đang đăng nhập |
-| POST | `/api/auth/setup` · `/login` · `/logout` · `/password` | xác thực |
-| GET | `/api/system/overview` · `/history` | CPU, RAM, nhiệt độ, mạng, lịch sử |
-| GET/POST | `/api/system/services` · `/services/{id}/{start\|stop\|restart}` | dịch vụ |
-| GET | `/api/system/logs` | 300 dòng log cuối |
-| POST | `/api/system/power` `{action: reboot\|poweroff}` | nguồn |
-| GET | `/api/storage/disks` | ổ đĩa và phân vùng |
-| POST | `/api/storage/mount` · `/unmount` `{device}` | mount và tháo ổ |
-| POST | `/api/storage/format` `{device, label, confirm}` | format ext4 (`confirm` phải trùng tên thiết bị) |
-| GET/POST | `/api/shares` · DELETE `/api/shares/{name}` | thư mục chia sẻ |
-| POST | `/api/smb-users` · DELETE `/api/smb-users/{name}` | người dùng SMB |
-| GET | `/api/network` · POST `/api/network/hostname` | mạng |
+| Giám sát | CPU, RAM, nhiệt độ, mạng (biểu đồ 10 phút), RAM từng dịch vụ, **cảnh báo** (ổ đầy, SMART lỗi, quá nhiệt, HTTPS/firewall tắt…) |
+| Ổ đĩa | Liệt kê ổ USB/SATA/NVMe; mount/tháo; format ext4; **khởi tạo ổ mới** (GPT + ext4); **SMART**; tự kiểm tra lỗi (e2fsck) và tự mount lại sau khi khởi động; "Sửa quyền" cho ổ mang từ máy khác sang |
+| Tệp | Trình quản lý file trên web: duyệt, tải lên (có tiến độ), tải xuống, tạo thư mục, đổi tên, xóa vào **thùng rác** (giữ 30 ngày, khôi phục được) |
+| Chia sẻ | SMB qua **ksmbd** (SMB3 chạy trong kernel), **quyền đọc/ghi theo từng người dùng**, khách; **NFS** theo dải mạng |
+| Mạng | DHCP hoặc **IP tĩnh**; **firewall nftables**. Thay đổi nào có nguy cơ làm mất kết nối sẽ **tự hoàn tác sau 2 phút** nếu không được xác nhận |
+| Hệ thống | Dịch vụ, nhật ký lọc theo nguồn, đổi mật khẩu, tắt/khởi động lại, **HTTPS** (chứng chỉ tự ký, hiện vân tay để so), **sao lưu/khôi phục** cấu hình |
+| Cập nhật | **A/B**: ghi bản mới vào slot dự phòng, kiểm tra SHA-256; nếu bản mới không chạy ổn định thì **tự quay về bản cũ** |
+| Khôi phục | Quên mật khẩu: tạo file `rustnas-reset-admin.txt` (đặt lại admin) hoặc `rustnas-factory-reset.txt` (xóa toàn bộ cấu hình) trên phân vùng FAT của thẻ nhớ |
 
 ## Bảo mật
 
-- Daemon chạy bằng quyền root nhưng **không bao giờ gọi shell**. Mọi lệnh đều được chạy trực tiếp với tham số đã kiểm tra: tên thiết bị chỉ gồm `[a-z0-9]`, đường dẫn share phải nằm trong `/mnt/<ổ đã mount>`, không chấp nhận `..`. Thẻ hệ thống luôn bị chặn mount và format.
-- Mật khẩu admin được băm bằng argon2id. Đăng nhập sai sẽ bị chờ 1,5 giây. Trang có CSP chặt, `frame-ancestors 'none'` và `nosniff`.
-- Bản v0.1 chạy HTTP thuần, **chỉ nên dùng trong mạng LAN**. HTTPS, tách quyền root ra helper riêng và firewall nằm trong kế hoạch v0.5.
-- Tài khoản `root` trên console chưa có mật khẩu (Buildroot mặc định) để tiện debug qua HDMI hoặc serial. Hãy đặt `BR2_TARGET_GENERIC_ROOT_PASSWD` trước khi dùng thật. Image không có SSH.
+- **Tách quyền**: khởi động bằng root, rustnasd tự tách làm hai tiến trình. Một **helper root** rất nhỏ chỉ nhận một danh sách thao tác cố định (mount, mkfs, ghi cấu hình SMB…). Helper tự kiểm tra lại mọi tham số và tự sinh mọi file cấu hình từ dữ liệu có cấu trúc. **Tiến trình web chạy bằng user `nas`** không có quyền root. Hai bên nói chuyện qua Unix socket mode 0600 và có kiểm tra UID của bên gọi.
+- Không bao giờ gọi shell, mọi lệnh đều chạy với tham số đã kiểm tra. Đường dẫn bị khóa trong ổ dữ liệu: chặn `..`, chặn symlink trỏ ra ngoài. Thẻ hệ thống luôn bị chặn thao tác.
+- Mật khẩu admin băm bằng **argon2id**. Sau 5 lần đăng nhập sai, IP đó bị **khóa 5 phút**. Session dùng cookie `HttpOnly; SameSite=Strict; Secure`.
+- **CSRF**: mọi request thay đổi dữ liệu phải có header `X-RustNAS: 1`.
+- Có các header CSP chặt, `X-Frame-Options: DENY`, `nosniff`, HSTS (khi chạy HTTPS), `no-store` cho API.
+- Mount ổ dữ liệu với `nodev,nosuid` (và `noexec` cho FAT/NTFS). SMB: tối thiểu SMB2.1, `restrict anonymous`, ẩn thư mục rác. NFS: `all_squash`, chỉ cho phép theo dải mạng.
+- Rootfs **chỉ-đọc**, trạng thái nằm trên phân vùng riêng.
+- Mặc định **không có SSH**. Root trên console chưa có mật khẩu, tiện debug qua HDMI hoặc serial; hãy đặt `BR2_TARGET_GENERIC_ROOT_PASSWD` nếu đặt máy ở nơi người khác chạm vào được.
 
-## Cần kiểm chứng trên phần cứng thật
+## Kiến trúc
 
-Code đã viết xong và kiểm tra logic, nhưng những điểm sau phụ thuộc vào phiên bản Buildroot và phần cứng nên cần thử thật:
+```
+Trình duyệt ──HTTPS :8443──► rustnasd (user nas): REST API + giao diện nhúng
+                                   │ Unix socket, thao tác cố định
+                                   ▼
+                             helper (root): mount · mkfs · sfdisk · ksmbd · nft · ifup · cập nhật A/B
+Linux (Buildroot, BusyBox init, musl) · ksmbd · nfsd · nftables · ext4 · zram
+```
 
-- Tên tùy chọn `BR2_PACKAGE_RPI_FIRMWARE_CD` trong bản Buildroot đang dùng. Script build sẽ cảnh báo nếu tùy chọn này không được bật, và `post-image.sh` tự chuyển sang `gpu_mem=64`.
-- Cú pháp `ksmbd.adduser -a/-u/-d USER -p PASS` và `ksmbd.control -r` của bản ksmbd-tools đi kèm. Nếu `ksmbd.control -r` không chạy, script tự gửi `SIGHUP` thay thế.
-- Tốc độ SMB thực tế qua cổng Ethernet 100 Mbit (lý thuyết tối đa ~11 MB/s) và mức RAM thực tế.
-- Việc tự mount lại ổ USB sau khi khởi động lại hoặc mất điện.
-
-## Lộ trình
-
-| Bản | Nội dung |
+| Phân vùng thẻ nhớ (Pi) | Nội dung |
 |---|---|
-| **v0.1** (bản này) | image boot, DHCP, web UI, đăng nhập, giám sát, ổ đĩa, SMB qua ksmbd |
-| v0.2 | khởi tạo ổ mới (tạo bảng phân vùng), SMART, cảnh báo ổ đầy |
-| v0.3 | NFS (tùy chọn), quyền theo thư mục, thùng rác SMB |
-| v0.4 | trình quản lý file và upload/download qua web, xem log theo dịch vụ |
-| v0.5 | HTTPS, IP tĩnh, firewall, sao lưu cấu hình, helper tách quyền root |
-| v1.0 | rootfs chỉ-đọc + cập nhật A/B, khôi phục, thử mất điện, image x86_64 `.iso` |
+| p1 `boot` FAT32 | firmware, `Image-a/b`, `cmdline-a/b.txt`, `slot.txt`, file khôi phục |
+| p2 `rootfs-a` ext4 (chỉ-đọc) | hệ thống, slot A |
+| p3 `rootfs-b` ext4 (chỉ-đọc) | hệ thống, slot B (bản cập nhật được ghi vào slot đang không dùng) |
+| p4 `persist` ext4 | `/var/lib/rustnas`: tài khoản, chia sẻ, mạng, chứng chỉ TLS… |
+
+Ngân sách RAM ước tính khi rảnh khoảng 50–90 MB: kernel + BusyBox, rustnasd (~6–10 MB cho cả hai tiến trình), ksmbd. Trên Pi, `gpu_mem=16` trả lại khoảng 60 MB RAM, và có 384 MB swap nén bằng zram.
+
+## Cấu trúc mã nguồn
+
+```
+core/src/
+  main.rs        khởi động, tách quyền (fork), HTTPS + HTTP redirect, tác vụ nền
+  privileged.rs  helper root: danh sách thao tác + kiểm tra lại
+  api.rs         REST API          web.rs   giao diện, header bảo mật, CSRF
+  auth.rs        argon2id, session, khóa theo IP
+  storage.rs     ổ đĩa, mount, mkfs, khởi tạo GPT, SMART
+  files.rs       trình quản lý file + thùng rác
+  shares.rs      SMB (ksmbd) + NFS, quyền theo user
+  netcfg.rs      IP tĩnh/DHCP, firewall nftables, tên máy (tự hoàn tác)
+  update.rs      cập nhật A/B (tar + SHA-256)
+  backup.rs      sao lưu/khôi phục   tls.rs  chứng chỉ, HTTPS listener
+  alerts.rs  monitor.rs  network.rs  system.rs  config.rs  util.rs
+frontend/        HTML/CSS/JS thuần, nhúng vào binary
+dev/mock-server.mjs   server giả lập để xem giao diện (Node, không phụ thuộc)
+buildroot-external/
+  configs/rustnas_rpi3.fragment     gộp lên raspberrypi3_64_defconfig
+  configs/rustnas_x86_64.fragment   gộp lên pc_x86_64_bios_defconfig
+  board/common/   post-build, overlay (zram, A/B watchdog, sysctl), kernel options
+  board/rpi3/     config.txt, cmdline, genimage A/B, post-image (+ gói cập nhật)
+  package/rustnas/
+scripts/  build-core.sh · build-image.sh · dev-run.sh · ci-annotate.py
+```
+
+## Build
+
+**Cách khuyến nghị: GitHub Actions.** Mỗi lần push lên `main`, workflow sẽ chạy test, clippy, biên dịch chéo, chạy thử daemon (smoke test), rồi build cả hai image. Kết quả nằm trong tab *Actions*, mục *Artifacts*:
+- `rustnas-rpi3`: `rustnas-rpi3b-aarch64.img.xz` (để flash) và `rustnas-rpi3b-update-<ver>.tar` (để cập nhật qua web)
+- `rustnas-x86_64`: `rustnas-x86_64.iso`
+
+**Build tại máy** (Linux hoặc WSL2, cần khoảng 6 GB RAM và 15 GB ổ đĩa):
+```bash
+sudo apt install build-essential git rsync bc cpio unzip wget file perl python3 patch xz-utils libncurses-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+pip install ziglang && cargo install cargo-zigbuild
+BOARD=rpi3 bash scripts/build-image.sh       # hoặc BOARD=x86_64
+```
+
+## Cài đặt
+
+**Raspberry Pi 3B**
+1. Flash `rustnas-rpi3b-aarch64.img.xz` bằng Raspberry Pi Imager (chọn *Use custom*) hoặc balenaEtcher. **Việc này xóa sạch thẻ nhớ.**
+2. Cắm dây mạng và ổ USB, rồi cấp nguồn 5V/2.5A. Ổ HDD 2.5" nên cắm qua hub USB có nguồn riêng.
+3. Địa chỉ web hiện lên màn hình HDMI. Mở địa chỉ đó, bỏ qua cảnh báo chứng chỉ tự ký, rồi **tạo tài khoản admin ngay**.
+
+**PC x86_64**: ghi `rustnas-x86_64.iso` ra USB bằng balenaEtcher hoặc Rufus (chế độ DD), rồi boot từ USB. Hệ thống chạy trong RAM. Muốn cấu hình được giữ lại sau khi tắt máy, hãy tạo một phân vùng ext4 có nhãn `rustnas-data` trên một ổ bất kỳ.
+
+## Phát triển
+
+- Chỉ chỉnh giao diện: chạy `node dev/mock-server.mjs`, sửa file trong `frontend/` rồi tải lại trình duyệt.
+- Daemon thật trên Linux/WSL ở chế độ dry-run: `bash scripts/dev-run.sh`. Test: `cargo test --manifest-path core/Cargo.toml`.
+
+## Giới hạn đã biết
+
+- ksmbd **không có thùng rác SMB**: file xóa qua Windows hay macOS sẽ mất ngay. Thùng rác chỉ áp dụng cho thao tác xóa trên web.
+- Cơ chế A/B trên Pi 3 tự quay về bản cũ khi hệ mới khởi động lên nhưng không chạy ổn định. Nếu **kernel mới bị panic ngay khi boot**, firmware Pi 3 không tự chuyển slot được. Khi đó bạn sửa `slot.txt` trên phân vùng FAT từ máy tính, đổi `-b` thành `-a`.
+- Gói cập nhật được kiểm tra bằng SHA-256 nhưng **chưa ký số**. Chỉ admin đã đăng nhập mới tải gói lên được.
+- Ethernet trên Pi 3B là 100 Mbit, tối đa khoảng 11 MB/s.
+- Những phần cần kiểm chứng trên phần cứng thật trước khi dùng cho dữ liệu quan trọng: tên một số tùy chọn Buildroot (script build sẽ cảnh báo nếu tùy chọn không được bật), cú pháp `ksmbd.adduser` của bản ksmbd-tools đi kèm, và việc boot ISO x86 trên các dòng mainboard khác nhau.

@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# A/B update watchdog (Raspberry Pi image).
+# After an update, /boot/rustnas-try holds "<slot> <boots>". rustnasd removes
+# it once the new system has been healthy for 90 s. If the new slot boots
+# twice without confirming, switch back to the previous slot and reboot.
+#
+
+[ "$1" = start ] || exit 0
+TRY=/boot/rustnas-try
+[ -f "$TRY" ] || exit 0
+
+CUR=$(sed -n 's/.*rustnas\.slot=\([ab]\).*/\1/p' /proc/cmdline)
+read -r SLOT COUNT < "$TRY"
+COUNT=${COUNT:-0}
+
+if [ -z "$CUR" ] || [ "$CUR" != "$SLOT" ]; then
+	# Running the old slot (manual revert or firmware fallback): give up the try.
+	rm -f "$TRY"
+	exit 0
+fi
+
+if [ "$COUNT" -ge 2 ]; then
+	OTHER=a
+	[ "$CUR" = a ] && OTHER=b
+	echo "update: slot $CUR never confirmed — rolling back to slot $OTHER"
+	printf 'kernel=Image-%s\ncmdline=cmdline-%s.txt\n' "$OTHER" "$OTHER" > /boot/slot.txt.new
+	mv /boot/slot.txt.new /boot/slot.txt
+	rm -f "$TRY"
+	sync
+	reboot -f
+fi
+
+echo "$SLOT $((COUNT + 1))" > "$TRY"
+sync

@@ -1,18 +1,28 @@
-//! Block devices: discovery from /sys/block, mounting data disks below
-//! `mount_root`, formatting to ext4, and re-mounting them after a reboot.
+//! Block devices: discovery (/sys/block), mount/unmount, format, initialise
+//! (new GPT partition table), SMART health, and re-mounting after reboot.
+//!
+//! Functions prefixed `h_` run inside the root helper and re-validate every
+//! argument themselves; the rest run in the unprivileged web process.
 
 use std::{
     collections::HashMap,
     ffi::CString,
     fs,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
 
-use crate::{config::Config, util};
+use crate::{
+    config::Config,
+    privileged::{self, Op},
+    util,
+};
 
-const SKIP_PREFIXES: &[&str] = &["loop", "ram", "zram", "fd", "sr", "mtdblock", "nbd"];
+const SKIP_PREFIXES: &[&str] = &["loop", "ram", "zram", "fd", "sr", "mtdblock", "nbd", "dm-"];
+pub const TRASH_DIR: &str = ".rustnas-trash";
+pub const UPDATE_DIR: &str = ".rustnas-update";
 
 #[derive(Serialize, Clone, Debug)]
 pub struct Partition {
@@ -36,7 +46,7 @@ pub struct Disk {
     pub transport: String,
     pub rotational: bool,
     pub removable: bool,
-    /// Holds the OS (SD card) — read-only in the UI.
+    /// Holds the OS — never mounted, formatted or initialised from the UI.
     pub system: bool,
     pub partitions: Vec<Partition>,
 }
@@ -48,9 +58,38 @@ pub struct MountInfo {
 
 type BlkInfo = HashMap<String, HashMap<String, String>>;
 
+// ---- discovery ----------------------------------------------------------------
+
+/// Decode a Linux dev_t (glibc/musl encoding).
+fn dev_major_minor(dev: u64) -> (u64, u64) {
+    let major = ((dev >> 8) & 0xfff) | ((dev >> 32) & !0xfff);
+    let minor = (dev & 0xff) | ((dev >> 12) & !0xff);
+    (major, minor)
+}
+
+/// Whole-disk name holding "/" (e.g. "mmcblk0"), or the configured override.
+pub fn system_disk(cfg: &Config) -> Option<String> {
+    if !cfg.system_disk.is_empty() {
+        return Some(cfg.system_disk.clone());
+    }
+    let (maj, min) = dev_major_minor(fs::metadata("/").ok()?.dev());
+    let p = fs::canonicalize(format!("/sys/dev/block/{maj}:{min}")).ok()?;
+    let disk = if p.join("partition").exists() { p.parent()?.to_path_buf() } else { p };
+    disk.file_name().map(|n| n.to_string_lossy().into_owned())
+}
+
+pub fn valid_devname(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 32 && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
+pub fn read_mounts() -> Vec<MountInfo> {
+    parse_mounts(&fs::read_to_string("/proc/self/mounts").unwrap_or_default())
+}
+
 pub fn list(cfg: &Config) -> Vec<Disk> {
-    let mounts = parse_mounts(&fs::read_to_string("/proc/self/mounts").unwrap_or_default());
-    let blk = util::run_ro("blkid", &[]).map(|s| parse_blkid(&s)).unwrap_or_default();
+    let mounts = read_mounts();
+    let blk = privileged::call(cfg, Op::Blkid).map(|s| parse_blkid(&s)).unwrap_or_default();
+    let sys = system_disk(cfg);
     let mut names: Vec<String> = match fs::read_dir("/sys/block") {
         Ok(rd) => rd
             .filter_map(Result::ok)
@@ -68,23 +107,15 @@ pub fn list(cfg: &Config) -> Vec<Disk> {
         if size_bytes == 0 {
             continue; // empty card reader slot etc.
         }
-        let mut pnames: Vec<String> = fs::read_dir(&base)
-            .map(|rd| {
-                rd.filter_map(Result::ok)
-                    .map(|e| e.file_name().to_string_lossy().into_owned())
-                    .filter(|n| n.starts_with(name.as_str()) && base.join(n).join("partition").exists())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut pnames = partition_names(&name);
         pnames.sort_by(|a, b| (a.len(), a).cmp(&(b.len(), b)));
         let mut partitions: Vec<Partition> =
             pnames.iter().map(|p| partition(p, &base.join(p), &mounts, &blk)).collect();
         // A disk formatted without a partition table ("superfloppy").
-        if partitions.is_empty() && blk.contains_key(&format!("/dev/{name}")) {
+        if partitions.is_empty() && blk.get(&format!("/dev/{name}")).is_some_and(|m| m.contains_key("TYPE")) {
             partitions.push(partition(&name, &base, &mounts, &blk));
         }
-
-        let system = name == cfg.system_disk
+        let system = sys.as_deref() == Some(name.as_str())
             || partitions.iter().any(|p| {
                 p.mountpoint.as_deref().is_some_and(|m| {
                     m == "/" || m.starts_with("/boot") || Path::new(m) == cfg.state_dir.as_path()
@@ -121,6 +152,18 @@ pub fn list(cfg: &Config) -> Vec<Disk> {
     disks
 }
 
+fn partition_names(disk: &str) -> Vec<String> {
+    let base = Path::new("/sys/block").join(disk);
+    fs::read_dir(&base)
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with(disk) && base.join(n).join("partition").exists())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn sectors(sys: &Path) -> u64 {
     util::read_trim(sys.join("size")).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0) * 512
 }
@@ -144,10 +187,10 @@ fn partition(name: &str, sys: &Path, mounts: &[MountInfo], blk: &BlkInfo) -> Par
     }
 }
 
-/// (total, used) bytes of a mounted filesystem.
+/// (total, used, available) bytes of a mounted filesystem.
 // statvfs field types are u64 on 64-bit Linux but u32 on some 32-bit targets.
 #[allow(clippy::useless_conversion)]
-fn fs_usage(path: &str) -> Option<(u64, u64)> {
+pub fn fs_usage3(path: &str) -> Option<(u64, u64, u64)> {
     let c = CString::new(path).ok()?;
     // SAFETY: statvfs fills the zeroed struct; c is a valid NUL-terminated path.
     let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
@@ -157,7 +200,12 @@ fn fs_usage(path: &str) -> Option<(u64, u64)> {
     let frsize = u64::from(s.f_frsize);
     let total = u64::from(s.f_blocks) * frsize;
     let free = u64::from(s.f_bfree) * frsize;
-    Some((total, total.saturating_sub(free)))
+    let avail = u64::from(s.f_bavail) * frsize;
+    Some((total, total.saturating_sub(free), avail))
+}
+
+fn fs_usage(path: &str) -> Option<(u64, u64)> {
+    fs_usage3(path).map(|(t, u, _)| (t, u))
 }
 
 pub fn parse_mounts(s: &str) -> Vec<MountInfo> {
@@ -205,16 +253,30 @@ pub fn parse_blkid(out: &str) -> BlkInfo {
 }
 
 pub fn is_mountpoint(p: &Path) -> bool {
-    parse_mounts(&fs::read_to_string("/proc/self/mounts").unwrap_or_default())
-        .iter()
-        .any(|m| Path::new(&m.mountpoint) == p)
+    read_mounts().iter().any(|m| Path::new(&m.mountpoint) == p)
+}
+
+/// Mounted data filesystems directly below mount_root.
+pub fn data_mounts(cfg: &Config) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = read_mounts()
+        .into_iter()
+        .map(|m| PathBuf::from(m.mountpoint))
+        .filter(|p| p.parent() == Some(cfg.mount_root.as_path()))
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// The data mount that contains `p` (p must already be normalised).
+pub fn data_mount_of(cfg: &Config, p: &Path) -> Option<PathBuf> {
+    let rel = p.strip_prefix(&cfg.mount_root).ok()?;
+    let top = cfg.mount_root.join(rel.components().next()?);
+    is_mountpoint(&top).then_some(top)
 }
 
 fn find(cfg: &Config, name: &str) -> Result<(Disk, Partition), String> {
-    let valid = !name.is_empty()
-        && name.len() <= 32
-        && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
-    if !valid {
+    if !valid_devname(name) {
         return Err("Tên thiết bị không hợp lệ".into());
     }
     for d in list(cfg) {
@@ -229,18 +291,6 @@ fn find(cfg: &Config, name: &str) -> Result<(Disk, Partition), String> {
     Err(format!("Không tìm thấy phân vùng {name}"))
 }
 
-fn mount_opts(cfg: &Config, fstype: &str) -> Result<(&'static str, String), String> {
-    // Non-POSIX filesystems get the share owner so SMB users can write.
-    let owner = format!("uid={},gid={},umask=002", cfg.share_uid, cfg.share_gid);
-    Ok(match fstype {
-        "ext4" | "ext3" | "ext2" => ("ext4", "noatime".into()),
-        "vfat" => ("vfat", format!("noatime,{owner},utf8")),
-        "exfat" => ("exfat", format!("noatime,{owner}")),
-        "ntfs" => ("ntfs3", format!("noatime,{owner}")),
-        other => return Err(format!("Chưa hỗ trợ filesystem {other}")),
-    })
-}
-
 fn sanitize(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(32).collect()
 }
@@ -249,24 +299,14 @@ fn dir_in_use(p: &Path) -> bool {
     is_mountpoint(p) || fs::read_dir(p).map(|mut d| d.next().is_some()).unwrap_or(false)
 }
 
-fn do_mount(cfg: &Config, part: &Partition, mp: &Path) -> Result<(), String> {
-    let fstype = part.fstype.as_deref().ok_or("Phân vùng chưa có filesystem — hãy format trước")?;
-    let (t, opts) = mount_opts(cfg, fstype)?;
-    if !cfg.dry_run {
-        fs::create_dir_all(mp).map_err(|e| format!("{}: {e}", mp.display()))?;
-    }
-    let mps = mp.to_string_lossy().into_owned();
-    util::run(cfg.dry_run, "mount", &["-t", t, "-o", opts.as_str(), part.dev.as_str(), mps.as_str()])?;
-    crate::info!("mounted {} at {mps}", part.dev);
-    Ok(())
-}
+// ---- web-side operations (go through the helper) -------------------------------------
 
-/// Mounts a data partition at /mnt/<label> and remembers it for next boot.
 pub fn mount(cfg: &Config, name: &str) -> Result<String, String> {
     let (_disk, part) = find(cfg, name)?;
     if let Some(mp) = &part.mountpoint {
         return Err(format!("{name} đã được mount tại {mp}"));
     }
+    let fstype = part.fstype.clone().ok_or("Phân vùng chưa có filesystem — hãy format trước")?;
     let base = part.label.as_deref().map(sanitize).filter(|s| !s.is_empty()).unwrap_or_else(|| name.to_string());
     let mut mp = cfg.mount_root.join(&base);
     if dir_in_use(&mp) {
@@ -275,30 +315,22 @@ pub fn mount(cfg: &Config, name: &str) -> Result<String, String> {
     if dir_in_use(&mp) {
         return Err(format!("{} đang được dùng", mp.display()));
     }
-    do_mount(cfg, &part, &mp)?;
+    let mps = mp.to_string_lossy().into_owned();
+    privileged::call(cfg, Op::Mount { dev: name.into(), mountpoint: mps.clone(), fstype })?;
     if let Some(uuid) = &part.uuid {
-        remember(cfg, uuid, &mp);
+        remember(cfg, uuid, &mps);
     }
-    Ok(mp.to_string_lossy().into_owned())
+    Ok(mps)
 }
 
 pub fn unmount(cfg: &Config, name: &str, share_paths: &[String]) -> Result<(), String> {
     let (_disk, part) = find(cfg, name)?;
     let mp = part.mountpoint.ok_or_else(|| format!("{name} chưa được mount"))?;
-    let mpp = Path::new(&mp);
-    if !mpp.starts_with(&cfg.mount_root) {
-        return Err(format!("Chỉ tháo được ổ mount trong {}", cfg.mount_root.display()));
-    }
-    if let Some(s) = share_paths.iter().find(|s| Path::new(s).starts_with(mpp)) {
+    if let Some(s) = share_paths.iter().find(|s| Path::new(s).starts_with(&mp)) {
         return Err(format!("Chia sẻ {s} đang nằm trên ổ này — hãy xóa chia sẻ trước"));
     }
-    util::run(cfg.dry_run, "sync", &[])?;
-    util::run(cfg.dry_run, "umount", &[mp.as_str()])?;
-    if !cfg.dry_run {
-        let _ = fs::remove_dir(mpp);
-    }
+    privileged::call(cfg, Op::Umount { mountpoint: mp.clone() })?;
     forget(cfg, &mp);
-    crate::info!("unmounted {mp}");
     Ok(())
 }
 
@@ -306,21 +338,40 @@ pub fn format(cfg: &Config, name: &str, label: &str, confirm: &str) -> Result<()
     if confirm != name {
         return Err("Tên xác nhận không khớp — chưa format".into());
     }
-    let label = label.trim();
-    if label.len() > 16 || !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-        return Err("Nhãn chỉ gồm chữ, số, - và _ (tối đa 16 ký tự)".into());
-    }
+    validate_label(label)?;
     let (_disk, part) = find(cfg, name)?;
     if part.mountpoint.is_some() {
         return Err("Hãy tháo (unmount) phân vùng trước khi format".into());
     }
-    let mut args = vec!["-F", "-q", "-m", "1", "-E", "lazy_itable_init=1,lazy_journal_init=1"];
-    if !label.is_empty() {
-        args.extend(["-L", label]);
+    privileged::call(cfg, Op::Mkfs { dev: name.into(), label: label.trim().into() }).map(|_| ())
+}
+
+/// Wipe a whole disk: new GPT table with one ext4 partition.
+pub fn initialize(cfg: &Config, disk: &str, label: &str, confirm: &str) -> Result<(), String> {
+    if confirm != disk {
+        return Err("Tên xác nhận không khớp — chưa khởi tạo".into());
     }
-    args.push(part.dev.as_str());
-    crate::info!("formatting {} as ext4", part.dev);
-    util::run(cfg.dry_run, "mkfs.ext4", &args).map(|_| ())
+    validate_label(label)?;
+    let d = list(cfg).into_iter().find(|d| d.name == disk).ok_or("Không tìm thấy ổ")?;
+    if d.system {
+        return Err("Không thể khởi tạo thẻ nhớ hệ thống".into());
+    }
+    if let Some(p) = d.partitions.iter().find(|p| p.mountpoint.is_some()) {
+        return Err(format!("Hãy tháo {} trước", p.name));
+    }
+    privileged::call(cfg, Op::Initialize { disk: disk.into(), label: label.trim().into() }).map(|_| ())
+}
+
+pub fn fix_owner(cfg: &Config, mountpoint: &str) -> Result<(), String> {
+    privileged::call(cfg, Op::FixOwner { path: mountpoint.into() }).map(|_| ())
+}
+
+fn validate_label(label: &str) -> Result<(), String> {
+    let label = label.trim();
+    if label.len() > 16 || !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err("Nhãn chỉ gồm chữ, số, - và _ (tối đa 16 ký tự)".into());
+    }
+    Ok(())
 }
 
 // ---- remembered mounts (state_dir/mounts.toml) ------------------------------
@@ -354,11 +405,10 @@ fn save_table(cfg: &Config, t: &MountTable) {
     }
 }
 
-fn remember(cfg: &Config, uuid: &str, mp: &Path) {
+fn remember(cfg: &Config, uuid: &str, mp: &str) {
     let mut t = load_table(cfg);
-    let mps = mp.to_string_lossy().into_owned();
-    t.mount.retain(|e| e.uuid != uuid && e.mountpoint != mps);
-    t.mount.push(MountEntry { uuid: uuid.into(), mountpoint: mps });
+    t.mount.retain(|e| e.uuid != uuid && e.mountpoint != mp);
+    t.mount.push(MountEntry { uuid: uuid.into(), mountpoint: mp.into() });
     save_table(cfg, &t);
 }
 
@@ -377,8 +427,7 @@ pub fn restore_mounts(cfg: &Config) -> usize {
     let disks = list(cfg);
     let mut n = 0;
     for e in &t.mount {
-        let mp = Path::new(&e.mountpoint);
-        if !mp.starts_with(&cfg.mount_root) || is_mountpoint(mp) {
+        if is_mountpoint(Path::new(&e.mountpoint)) {
             continue;
         }
         let found = disks
@@ -386,14 +435,251 @@ pub fn restore_mounts(cfg: &Config) -> usize {
             .filter(|d| !d.system)
             .flat_map(|d| d.partitions.iter())
             .find(|p| p.uuid.as_deref() == Some(e.uuid.as_str()) && p.mountpoint.is_none());
-        if let Some(p) = found {
-            match do_mount(cfg, p, mp) {
-                Ok(()) => n += 1,
-                Err(err) => crate::info!("auto-mount {} failed: {err}", e.mountpoint),
-            }
+        let Some(p) = found else { continue };
+        let Some(fstype) = p.fstype.clone() else { continue };
+        let op = Op::Mount { dev: p.name.clone(), mountpoint: e.mountpoint.clone(), fstype };
+        match privileged::call(cfg, op) {
+            Ok(_) => n += 1,
+            Err(err) => crate::info!("auto-mount {} failed: {err}", e.mountpoint),
         }
     }
     n
+}
+
+// ---- SMART -------------------------------------------------------------------
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct Smart {
+    pub disk: String,
+    pub available: bool,
+    pub passed: Option<bool>,
+    pub temperature_c: Option<i64>,
+    pub power_on_hours: Option<i64>,
+    pub reallocated: Option<i64>,
+    pub pending: Option<i64>,
+    pub uncorrectable: Option<i64>,
+    pub percentage_used: Option<i64>,
+    pub model: Option<String>,
+    pub serial: Option<String>,
+    pub message: Option<String>,
+}
+
+pub fn smart(cfg: &Config, disk: &str) -> Smart {
+    match privileged::call(cfg, Op::Smart { disk: disk.into() }) {
+        Ok(json) => parse_smart(disk, &json),
+        Err(e) => Smart { disk: disk.into(), message: Some(e), ..Default::default() },
+    }
+}
+
+pub fn parse_smart(disk: &str, json: &str) -> Smart {
+    let mut s = Smart { disk: disk.into(), ..Default::default() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        s.message = Some("Ổ không hỗ trợ SMART (hoặc hộp USB không chuyển tiếp lệnh)".into());
+        return s;
+    };
+    s.passed = v.pointer("/smart_status/passed").and_then(|x| x.as_bool());
+    s.available = s.passed.is_some();
+    s.temperature_c = v.pointer("/temperature/current").and_then(|x| x.as_i64());
+    s.power_on_hours = v.pointer("/power_on_time/hours").and_then(|x| x.as_i64());
+    s.model = v.get("model_name").and_then(|x| x.as_str()).map(String::from);
+    s.serial = v.get("serial_number").and_then(|x| x.as_str()).map(String::from);
+    s.percentage_used = v.pointer("/nvme_smart_health_information_log/percentage_used").and_then(|x| x.as_i64());
+    if let Some(table) = v.pointer("/ata_smart_attributes/table").and_then(|x| x.as_array()) {
+        let raw = |id: i64| {
+            table
+                .iter()
+                .find(|a| a.get("id").and_then(|x| x.as_i64()) == Some(id))
+                .and_then(|a| a.pointer("/raw/value").and_then(|x| x.as_i64()))
+        };
+        s.reallocated = raw(5);
+        s.pending = raw(197);
+        s.uncorrectable = raw(198);
+    }
+    if !s.available {
+        s.message = v
+            .pointer("/smartctl/messages/0/string")
+            .and_then(|x| x.as_str())
+            .map(String::from)
+            .or(Some("Không đọc được SMART".into()));
+    }
+    s
+}
+
+// ---- helper-side implementations (run as root) ---------------------------------------
+
+fn h_check_data_dev(cfg: &Config, name: &str) -> Result<(), String> {
+    if !valid_devname(name) || !Path::new("/sys/class/block").join(name).exists() {
+        return Err("Thiết bị không hợp lệ".into());
+    }
+    if let Some(sys) = system_disk(cfg) {
+        if name.starts_with(&sys) {
+            return Err("Từ chối: đây là ổ hệ thống".into());
+        }
+    }
+    Ok(())
+}
+
+fn h_is_dev_mounted(name: &str) -> bool {
+    let dev = format!("/dev/{name}");
+    read_mounts().iter().any(|m| m.dev == dev || m.dev.starts_with(&dev))
+}
+
+/// mountpoint must be exactly mount_root/<one safe component>.
+fn h_check_mountpoint(cfg: &Config, mp: &str) -> Result<PathBuf, String> {
+    let p = Path::new(mp);
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if p.parent() != Some(cfg.mount_root.as_path()) || name.is_empty() || sanitize(name) != name {
+        return Err("Điểm mount không hợp lệ".into());
+    }
+    Ok(p.to_path_buf())
+}
+
+pub fn h_mount(cfg: &Config, dev: &str, mountpoint: &str, fstype: &str) -> Result<String, String> {
+    h_check_data_dev(cfg, dev)?;
+    let mp = h_check_mountpoint(cfg, mountpoint)?;
+    if h_is_dev_mounted(dev) || is_mountpoint(&mp) {
+        return Err("Đã được mount".into());
+    }
+    let owner = format!("uid={},gid={},umask=002", cfg.share_uid, cfg.share_gid);
+    let (t, opts) = match fstype {
+        "ext4" | "ext3" | "ext2" => ("ext4", "noatime,nodev,nosuid".to_string()),
+        "vfat" => ("vfat", format!("noatime,nodev,nosuid,noexec,{owner},utf8")),
+        "exfat" => ("exfat", format!("noatime,nodev,nosuid,noexec,{owner}")),
+        "ntfs" => ("ntfs3", format!("noatime,nodev,nosuid,noexec,{owner}")),
+        other => return Err(format!("Chưa hỗ trợ filesystem {other}")),
+    };
+    let devpath = format!("/dev/{dev}");
+    if t == "ext4" && !cfg.dry_run {
+        // Repair what can be repaired automatically after a power cut.
+        let (code, _) = util::run_status("e2fsck", &["-p", &devpath])?;
+        if code >= 4 {
+            return Err(format!("Filesystem trên {dev} có lỗi cần sửa thủ công (e2fsck mã {code})"));
+        }
+    }
+    if !cfg.dry_run {
+        fs::create_dir_all(&mp).map_err(|e| format!("{}: {e}", mp.display()))?;
+    }
+    let mps = mp.to_string_lossy().into_owned();
+    util::run(cfg.dry_run, "mount", &["-t", t, "-o", &opts, &devpath, &mps])?;
+    crate::info!("mounted {devpath} at {mps}");
+    Ok(mps)
+}
+
+pub fn h_umount(cfg: &Config, mountpoint: &str) -> Result<String, String> {
+    let mp = h_check_mountpoint(cfg, mountpoint)?;
+    if !cfg.dry_run && !is_mountpoint(&mp) {
+        return Err("Chưa được mount".into());
+    }
+    let mps = mp.to_string_lossy().into_owned();
+    util::run(cfg.dry_run, "sync", &[])?;
+    util::run(cfg.dry_run, "umount", &[&mps])?;
+    if !cfg.dry_run {
+        let _ = fs::remove_dir(&mp);
+    }
+    crate::info!("unmounted {mps}");
+    Ok(String::new())
+}
+
+fn mkfs_args<'a>(cfg_owner: &'a str, label: &'a str, dev: &'a str) -> Vec<&'a str> {
+    let mut args = vec!["-F", "-q", "-m", "1", "-E", cfg_owner];
+    if !label.is_empty() {
+        args.extend(["-L", label]);
+    }
+    args.push(dev);
+    args
+}
+
+pub fn h_mkfs(cfg: &Config, dev: &str, label: &str) -> Result<String, String> {
+    h_check_data_dev(cfg, dev)?;
+    validate_label(label)?;
+    if h_is_dev_mounted(dev) {
+        return Err("Phân vùng đang được mount".into());
+    }
+    let devpath = format!("/dev/{dev}");
+    // The share owner owns the new filesystem root, so SMB/web users can write.
+    let ext = format!("lazy_itable_init=1,lazy_journal_init=1,root_owner={}:{}", cfg.share_uid, cfg.share_gid);
+    crate::info!("formatting {devpath} as ext4");
+    util::run(cfg.dry_run, "mkfs.ext4", &mkfs_args(&ext, label, &devpath)).map(|_| String::new())
+}
+
+pub fn h_initialize(cfg: &Config, disk: &str, label: &str) -> Result<String, String> {
+    h_check_data_dev(cfg, disk)?;
+    validate_label(label)?;
+    if !Path::new("/sys/block").join(disk).exists() {
+        return Err("Chỉ khởi tạo được cả ổ (không phải phân vùng)".into());
+    }
+    if h_is_dev_mounted(disk) {
+        return Err("Ổ đang có phân vùng được mount".into());
+    }
+    let devpath = format!("/dev/{disk}");
+    crate::info!("initialising {devpath}: new GPT + ext4");
+    util::run(cfg.dry_run, "wipefs", &["-a", &devpath])?;
+    util::run_input(cfg.dry_run, "sfdisk", &["--wipe", "always", &devpath], "label: gpt\n,,L\n")?;
+    let part = if disk.ends_with(|c: char| c.is_ascii_digit()) { format!("{disk}p1") } else { format!("{disk}1") };
+    if !cfg.dry_run {
+        for _ in 0..20 {
+            if Path::new("/dev").join(&part).exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    }
+    h_mkfs(cfg, &part, label)?;
+    Ok(part)
+}
+
+/// Create a share directory and hand root-owned dirs to the share user.
+pub fn h_prepare_dir(cfg: &Config, path: &str) -> Result<String, String> {
+    let p = crate::files::normalize(cfg, path)?;
+    data_mount_of(cfg, &p).ok_or("Thư mục phải nằm trên ổ dữ liệu đã mount")?;
+    if cfg.dry_run {
+        return Ok(String::new());
+    }
+    fs::create_dir_all(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+    let real = fs::canonicalize(&p).map_err(|e| e.to_string())?;
+    data_mount_of(cfg, &real).ok_or("Đường dẫn trỏ ra ngoài ổ dữ liệu")?;
+    let meta = fs::symlink_metadata(&real).map_err(|e| e.to_string())?;
+    if meta.uid() == 0 {
+        std::os::unix::fs::chown(&real, Some(cfg.share_uid), Some(cfg.share_gid)).map_err(|e| e.to_string())?;
+    }
+    Ok(String::new())
+}
+
+/// chown -R a whole data disk to the share user (for disks brought from another PC).
+pub fn h_fix_owner(cfg: &Config, path: &str) -> Result<String, String> {
+    let p = h_check_mountpoint(cfg, path)?;
+    if !cfg.dry_run && !is_mountpoint(&p) {
+        return Err("Chưa được mount".into());
+    }
+    let owner = format!("{}:{}", cfg.share_uid, cfg.share_gid);
+    let ps = p.to_string_lossy().into_owned();
+    // -h: change symlinks themselves, never follow them out of the disk.
+    util::run(cfg.dry_run, "chown", &["-R", "-h", &owner, &ps])?;
+    util::run(cfg.dry_run, "chmod", &["-R", "u+rwX,g+rwX", &ps]).map(|_| String::new())
+}
+
+pub fn h_smart(cfg: &Config, disk: &str) -> Result<String, String> {
+    if !valid_devname(disk) || !Path::new("/sys/block").join(disk).exists() {
+        return Err("Ổ không hợp lệ".into());
+    }
+    if cfg.dry_run {
+        return Ok(String::new());
+    }
+    let dev = format!("/dev/{disk}");
+    // smartctl's exit code is a bitmask; judge by the JSON instead.
+    let (_, out) = util::run_status("smartctl", &["-j", "-a", &dev])?;
+    let needs_sat = serde_json::from_str::<serde_json::Value>(&out)
+        .map(|v| v.pointer("/smart_status/passed").is_none())
+        .unwrap_or(true);
+    if needs_sat {
+        // Most USB-SATA bridges need the SAT pass-through.
+        if let Ok((_, sat)) = util::run_status("smartctl", &["-j", "-a", "-d", "sat", &dev]) {
+            if serde_json::from_str::<serde_json::Value>(&sat).is_ok_and(|v| v.pointer("/smart_status/passed").is_some()) {
+                return Ok(sat);
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -414,5 +700,32 @@ mod tests {
         assert_eq!(m[0].mountpoint, "/mnt/my disk");
         assert_eq!(unescape("a\\134b"), "a\\b");
         assert_eq!(unescape("end\\04"), "end\\04");
+    }
+
+    #[test]
+    fn devt_decoding() {
+        assert_eq!(dev_major_minor((179 << 8) | 2), (179, 2));
+        assert_eq!(dev_major_minor((8 << 8) | 17), (8, 17));
+    }
+
+    #[test]
+    fn mountpoint_rules() {
+        let cfg = Config::default();
+        assert!(h_check_mountpoint(&cfg, "/mnt/data").is_ok());
+        assert!(h_check_mountpoint(&cfg, "/mnt/../etc").is_err());
+        assert!(h_check_mountpoint(&cfg, "/mnt/a/b").is_err());
+        assert!(h_check_mountpoint(&cfg, "/etc").is_err());
+        assert!(h_check_mountpoint(&cfg, "/mnt/a b").is_err());
+    }
+
+    #[test]
+    fn smart_json() {
+        let j = r#"{"smart_status":{"passed":true},"temperature":{"current":38},"power_on_time":{"hours":1234},
+            "ata_smart_attributes":{"table":[{"id":5,"raw":{"value":0}},{"id":197,"raw":{"value":2}}]}}"#;
+        let s = parse_smart("sda", j);
+        assert_eq!(s.passed, Some(true));
+        assert_eq!(s.temperature_c, Some(38));
+        assert_eq!(s.pending, Some(2));
+        assert!(!parse_smart("sda", "").available);
     }
 }

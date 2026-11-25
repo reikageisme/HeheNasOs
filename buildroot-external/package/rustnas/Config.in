@@ -5,13 +5,16 @@ config BR2_PACKAGE_RUSTNAS
 	  dashboard, plus the init script for the ksmbd SMB server.
 
 	  rustnasd is cross-compiled outside Buildroot as a fully static
-	  aarch64-unknown-linux-musl binary (scripts/build-core.sh), so it
-	  does not depend on the target C library.
+	  <arch>-unknown-linux-musl binary (scripts/build-core.sh).
 
 if BR2_PACKAGE_RUSTNAS
 
-config BR2_PACKAGE_RUSTNAS_BINARY
-	string "path to the prebuilt rustnasd binary"
-	default "$(BR2_EXTERNAL_RUSTNAS_PATH)/../core/target/aarch64-unknown-linux-musl/release/rustnasd"
+config BR2_PACKAGE_RUSTNAS_BOARD
+	string "board id"
+	default "x86_64" if BR2_x86_64
+	default "rpi3b"
+	help
+	  Selects files/rustnasd-<board>.toml and is checked against
+	  update bundles.
 
 endif

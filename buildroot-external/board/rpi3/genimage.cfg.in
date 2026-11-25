@@ -1,7 +1,8 @@
-# RustNAS SD card layout
-#   p1  boot     FAT32   firmware, kernel, DTBs, config.txt
-#   p2  rootfs   ext4    the OS
-#   p3  persist  ext4    /var/lib/rustnas (admin account, shares, ksmbd db)
+# RustNAS SD card layout (A/B)
+#   p1  boot     FAT32   firmware, Image-a/b, cmdline-a/b.txt, slot.txt
+#   p2  rootfs-a ext4    read-only system, slot A
+#   p3  rootfs-b ext4    read-only system, slot B (updates go to the idle slot)
+#   p4  persist  ext4    /var/lib/rustnas (accounts, shares, network, TLS...)
 
 image boot.vfat {
 	vfat {
@@ -22,7 +23,12 @@ image rustnas-rpi3b-aarch64.img {
 		image = "boot.vfat"
 	}
 
-	partition rootfs {
+	partition rootfs-a {
+		partition-type = 0x83
+		image = "rootfs.ext4"
+	}
+
+	partition rootfs-b {
 		partition-type = 0x83
 		image = "rootfs.ext4"
 	}

@@ -1,0 +1,15 @@
+# RustNAS daemon configuration — Raspberry Pi 3B image (read-only rootfs, A/B)
+listen = "0.0.0.0:8080"          # HTTP (redirects to HTTPS when enabled)
+https_listen = "0.0.0.0:8443"
+state_dir = "/var/lib/rustnas"   # persistent partition (mmcblk0p4)
+mount_root = "/mnt"              # data disks are mounted at /mnt/<label>
+system_disk = ""                 # auto-detected from "/"
+board = "rpi3b"
+privsep = true                   # web server runs as "nas", root helper does the rest
+boot_dir = "/boot"
+slot_a_dev = "mmcblk0p2"
+slot_b_dev = "mmcblk0p3"
+share_user = "nas"
+share_uid = 1000
+share_gid = 1000
+log_file = "/var/log/messages"

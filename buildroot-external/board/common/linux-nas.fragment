@@ -1,8 +1,20 @@
-# RustNAS additions on top of the Raspberry Pi kernel defconfig
+# RustNAS kernel options (all boards)
 
 # In-kernel SMB3 server (ksmbd): far lighter than Samba
 CONFIG_SMB_SERVER=m
 # CONFIG_SMB_SERVER_SMBDIRECT is not set
+
+# NFS server (started only when enabled in the UI)
+CONFIG_NFSD=m
+CONFIG_NFSD_V3=y
+CONFIG_NFSD_V4=y
+
+# Firewall (nftables)
+CONFIG_NETFILTER=y
+CONFIG_NF_CONNTRACK=m
+CONFIG_NF_TABLES=m
+CONFIG_NF_TABLES_INET=y
+CONFIG_NFT_CT=m
 
 # USB disks (incl. UAS enclosures) and their filesystems
 CONFIG_USB_STORAGE=y

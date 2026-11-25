@@ -1,0 +1,13 @@
+# RustNAS daemon configuration — x86_64 live ISO
+listen = "0.0.0.0:8080"
+https_listen = "0.0.0.0:8443"
+state_dir = "/var/lib/rustnas"   # partition labelled "rustnas-data" if present
+mount_root = "/mnt"
+system_disk = ""
+board = "x86_64"
+privsep = true
+boot_dir = "/nonexistent"        # no A/B updates on the live ISO
+share_user = "nas"
+share_uid = 1000
+share_gid = 1000
+log_file = "/var/log/messages"

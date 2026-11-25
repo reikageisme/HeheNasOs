@@ -1,4 +1,4 @@
-//! Services (status + start/stop via init scripts), logs and process memory.
+//! Services (status + control through the helper), logs and process memory.
 
 use std::{fs, path::Path};
 
@@ -6,7 +6,8 @@ use serde::Serialize;
 
 use crate::{
     config::Config,
-    util::{self, read_trim},
+    privileged::{self, Op},
+    util::read_trim,
 };
 
 struct Def {
@@ -14,23 +15,17 @@ struct Def {
     name: &'static str,
     /// Process names as shown in /proc/<pid>/comm (any of them).
     comms: &'static [&'static str],
-    /// Control script (start/stop/restart). "smb" uses `smb_service` from the
-    /// config; a script that does not exist on this system is view-only.
-    script: Option<&'static str>,
+    /// Name understood by the helper's Service op (None = view only).
+    ctl: Option<&'static str>,
 }
 
 const SERVICES: &[Def] = &[
-    Def { id: "rustnasd", name: "RustNAS daemon", comms: &["rustnasd"], script: None },
-    Def { id: "smb", name: "SMB server (ksmbd)", comms: &["ksmbd.mountd"], script: Some("") },
-    Def { id: "network", name: "Mạng / DHCP", comms: &["udhcpc", "dhcpcd", "NetworkManager"], script: None },
-    Def { id: "syslog", name: "System log", comms: &["syslogd", "systemd-journal"], script: Some("/etc/init.d/S01syslogd") },
+    Def { id: "rustnasd", name: "RustNAS daemon", comms: &["rustnasd"], ctl: None },
+    Def { id: "smb", name: "SMB server (ksmbd)", comms: &["ksmbd.mountd"], ctl: Some("smb") },
+    Def { id: "nfs", name: "NFS server", comms: &["rpc.mountd", "nfsd"], ctl: Some("nfs") },
+    Def { id: "network", name: "Mạng / DHCP", comms: &["udhcpc", "dhcpcd", "NetworkManager"], ctl: None },
+    Def { id: "syslog", name: "System log", comms: &["syslogd", "systemd-journal"], ctl: Some("syslog") },
 ];
-
-fn script_for(cfg: &Config, d: &Def) -> Option<String> {
-    let s = d.script?;
-    let s = if d.id == "smb" { cfg.smb_service.as_str() } else { s };
-    (!s.is_empty() && (cfg.dry_run || Path::new(s).exists())).then(|| s.to_string())
-}
 
 #[derive(Serialize)]
 pub struct ServiceStatus {
@@ -47,15 +42,14 @@ pub fn services(cfg: &Config) -> Vec<ServiceStatus> {
     SERVICES
         .iter()
         .map(|d| {
-            let mine: Vec<&(u32, String)> =
-                procs.iter().filter(|(_, c)| d.comms.contains(&c.as_str())).collect();
+            let mine: Vec<&(u32, String)> = procs.iter().filter(|(_, c)| d.comms.contains(&c.as_str())).collect();
             ServiceStatus {
                 id: d.id,
                 name: d.name,
                 running: !mine.is_empty(),
                 pids: mine.iter().map(|(p, _)| *p).collect(),
                 rss_bytes: mine.iter().map(|(p, _)| rss(&p.to_string())).sum(),
-                controllable: script_for(cfg, d).is_some(),
+                controllable: d.ctl.and_then(|c| privileged::service_script(cfg, c)).is_some(),
             }
         })
         .collect()
@@ -63,12 +57,11 @@ pub fn services(cfg: &Config) -> Vec<ServiceStatus> {
 
 pub fn service_action(cfg: &Config, id: &str, action: &str) -> Result<(), String> {
     let def = SERVICES.iter().find(|d| d.id == id).ok_or("Dịch vụ không tồn tại")?;
-    let script = script_for(cfg, def).ok_or("Dịch vụ này không điều khiển được từ giao diện web")?;
+    let ctl = def.ctl.ok_or("Dịch vụ này không điều khiển được từ giao diện web")?;
     if !matches!(action, "start" | "stop" | "restart") {
         return Err("Thao tác không hợp lệ".into());
     }
-    crate::info!("service {id}: {action}");
-    util::run(cfg.dry_run, &script, &[action]).map(|_| ())
+    privileged::call(cfg, Op::Service { name: ctl.into(), action: action.into() }).map(|_| ())
 }
 
 fn scan_procs() -> Vec<(u32, String)> {
@@ -92,8 +85,37 @@ pub fn rss(pid: &str) -> u64 {
         .unwrap_or(0)
 }
 
-pub fn tail(path: &Path, n: usize) -> Vec<String> {
+/// Does a syslog line belong to `source`?
+fn matches_source(line: &str, source: &str) -> bool {
+    let has = |tags: &[&str]| tags.iter().any(|t| line.contains(t));
+    match source {
+        "rustnasd" => has(&[" rustnasd", " rustnas:"]),
+        "smb" => has(&["ksmbd"]),
+        "nfs" => has(&["nfsd", "rpc.mountd", "rpcbind", "exportfs"]),
+        "network" => has(&["udhcpc", "ifup", "eth0", "nft"]),
+        "kernel" => has(&[" kern.", "kernel:"]),
+        _ => true,
+    }
+}
+
+pub fn tail(path: &Path, n: usize, source: &str, query: &str) -> Vec<String> {
     let s = fs::read_to_string(path).unwrap_or_default();
-    let lines: Vec<&str> = s.lines().collect();
+    let q = query.to_lowercase();
+    let lines: Vec<&str> = s
+        .lines()
+        .filter(|l| matches_source(l, source) && (q.is_empty() || l.to_lowercase().contains(&q)))
+        .collect();
     lines[lines.len().saturating_sub(n)..].iter().map(|l| l.to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn log_sources() {
+        let l = "Nov 25 10:00:00 rustnas user.info rustnasd: listening";
+        assert!(super::matches_source(l, "rustnasd"));
+        assert!(!super::matches_source(l, "smb"));
+        assert!(super::matches_source("Nov 25 rustnas kern.info kernel: ksmbd: running", "smb"));
+        assert!(super::matches_source(l, "all"));
+    }
 }

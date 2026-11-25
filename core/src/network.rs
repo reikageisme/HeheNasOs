@@ -4,7 +4,7 @@ use std::{collections::HashMap, ffi::CStr, fs, net::Ipv4Addr, path::Path};
 
 use serde::Serialize;
 
-use crate::util::{self, read_trim};
+use crate::util::read_trim;
 
 #[derive(Serialize)]
 pub struct Iface {
@@ -106,53 +106,4 @@ fn ipv4_addrs() -> HashMap<String, Vec<String>> {
         libc::freeifaddrs(ifap);
     }
     map
-}
-
-pub fn validate_hostname(name: &str) -> Result<(), String> {
-    let ok = !name.is_empty()
-        && name.len() <= 63
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        && !name.starts_with('-')
-        && !name.ends_with('-');
-    if ok { Ok(()) } else { Err("Tên máy chỉ gồm chữ, số và dấu - (tối đa 63 ký tự)".into()) }
-}
-
-pub fn set_hostname(dry_run: bool, name: &str) -> Result<(), String> {
-    validate_hostname(name)?;
-    if dry_run {
-        crate::info!("[dry-run] set hostname to {name}");
-        return Ok(());
-    }
-    util::write_atomic(Path::new("/etc/hostname"), format!("{name}\n").as_bytes(), 0o644)?;
-    if let Ok(hosts) = fs::read_to_string("/etc/hosts") {
-        let mut found = false;
-        let mut out: Vec<String> = hosts
-            .lines()
-            .map(|l| {
-                if l.starts_with("127.0.1.1") {
-                    found = true;
-                    format!("127.0.1.1\t{name}")
-                } else {
-                    l.to_string()
-                }
-            })
-            .collect();
-        if !found {
-            out.push(format!("127.0.1.1\t{name}"));
-        }
-        util::write_atomic(Path::new("/etc/hosts"), (out.join("\n") + "\n").as_bytes(), 0o644)?;
-    }
-    util::run(false, "hostname", &[name])?;
-    crate::info!("hostname changed to {name}");
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn hostnames() {
-        assert!(super::validate_hostname("rustnas-1").is_ok());
-        assert!(super::validate_hostname("-bad").is_err());
-        assert!(super::validate_hostname("a b").is_err());
-    }
 }

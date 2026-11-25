@@ -82,6 +82,37 @@ pub fn run(dry_run: bool, prog: &str, args: &[&str]) -> Result<String, String> {
     })
 }
 
+/// Like `run`, feeding `input` to the command's stdin (e.g. sfdisk scripts).
+pub fn run_input(dry_run: bool, prog: &str, args: &[&str], input: &str) -> Result<String, String> {
+    use std::process::Stdio;
+    if dry_run {
+        crate::info!("[dry-run] {prog} {} <<< {input:?}", redact(args));
+        return Ok(String::new());
+    }
+    let mut child = Command::new(prog)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Không chạy được {prog}: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(input.as_bytes()).map_err(|e| format!("{prog}: {e}"))?;
+    }
+    let out = child.wait_with_output().map_err(|e| format!("{prog}: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(format!("{prog}: {}", String::from_utf8_lossy(&out.stderr).trim()))
+    }
+}
+
+/// Exit status + stdout, for tools whose exit code is a bitmask (smartctl, e2fsck).
+pub fn run_status(prog: &str, args: &[&str]) -> Result<(i32, String), String> {
+    let out = Command::new(prog).args(args).output().map_err(|e| format!("Không chạy được {prog}: {e}"))?;
+    Ok((out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned()))
+}
+
 /// Run a read-only helper (always executed, even in dry-run mode).
 pub fn run_ro(prog: &str, args: &[&str]) -> Option<String> {
     Command::new(prog)

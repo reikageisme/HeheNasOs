@@ -1,10 +1,21 @@
-# Development config: run from the repository root (scripts/dev-run.sh).
+# Development config for the real daemon on Linux/WSL (scripts/dev-run.sh).
+# For a UI preview on Windows without Rust, use: node dev/mock-server.mjs
 listen = "0.0.0.0:8080"
+https_listen = "0.0.0.0:8443"
 state_dir = "dev/state"
 mount_root = "/mnt"
-system_disk = "none"
-smb_conf = "dev/state/ksmbd.conf"
-smb_service = ""
-web_root = "frontend"     # edit frontend/*, then just reload the browser
-log_file = "/var/log/dpkg.log"
+board = "dev"
+privsep = false
 dry_run = true
+smb_conf = "dev/state/ksmbd/ksmbd.conf"
+smb_service = ""
+nfs_service = ""
+exports_file = "dev/state/etc/exports"
+hostname_file = "dev/state/etc/hostname"
+hosts_file = "dev/state/etc/hosts"
+interfaces_file = "dev/state/etc/interfaces"
+resolv_static = "dev/state/etc/resolv.static"
+nft_file = "dev/state/etc/firewall.nft"
+boot_dir = "dev/state/boot"
+web_root = "frontend"
+log_file = "/var/log/dpkg.log"

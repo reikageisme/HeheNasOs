@@ -4,6 +4,7 @@
 use std::{
     collections::HashMap,
     fs,
+    net::IpAddr,
     path::{Path, PathBuf},
     sync::Mutex,
     time::{Duration, Instant},
@@ -47,8 +48,14 @@ pub struct AuthStore {
     path: PathBuf,
     file: Mutex<AuthFile>,
     sessions: Mutex<HashMap<String, Session>>,
+    /// Failed logins per client IP: (count, first failure).
+    fails: Mutex<HashMap<IpAddr, (u32, Instant)>>,
     ttl: Duration,
 }
+
+const MAX_FAILS: u32 = 5;
+const FAIL_WINDOW: Duration = Duration::from_secs(15 * 60);
+const LOCKOUT: Duration = Duration::from_secs(5 * 60);
 
 impl AuthStore {
     pub fn load(state_dir: &Path, ttl_secs: u64) -> Result<Self, String> {
@@ -61,6 +68,7 @@ impl AuthStore {
             path,
             file: Mutex::new(file),
             sessions: Mutex::new(HashMap::new()),
+            fails: Mutex::new(HashMap::new()),
             ttl: Duration::from_secs(ttl_secs.max(60)),
         })
     }
@@ -137,6 +145,29 @@ impl AuthStore {
         let sess = s.get_mut(token)?;
         sess.expires = now + self.ttl;
         Some(sess.user.clone())
+    }
+
+    /// Seconds left if this IP is locked out after too many failures.
+    pub fn locked_for(&self, ip: IpAddr) -> Option<u64> {
+        let f = self.fails.lock().unwrap();
+        let (n, first) = f.get(&ip)?;
+        let until = *first + FAIL_WINDOW.max(LOCKOUT);
+        (*n >= MAX_FAILS && Instant::now() < until).then(|| until.duration_since(Instant::now()).as_secs() + 1)
+    }
+
+    pub fn record_failure(&self, ip: IpAddr) {
+        let now = Instant::now();
+        let mut f = self.fails.lock().unwrap();
+        f.retain(|_, (_, first)| now.duration_since(*first) < FAIL_WINDOW.max(LOCKOUT));
+        if f.len() > 4096 {
+            f.clear(); // bounded memory under a spray of addresses
+        }
+        let e = f.entry(ip).or_insert((0, now));
+        e.0 += 1;
+    }
+
+    pub fn record_success(&self, ip: IpAddr) {
+        self.fails.lock().unwrap().remove(&ip);
     }
 
     pub fn destroy(&self, token: &str) {
@@ -231,6 +262,20 @@ mod tests {
         let h = hash_password("correct horse").unwrap();
         assert!(verify_password("correct horse", &h));
         assert!(!verify_password("wrong", &h));
+    }
+
+    #[test]
+    fn lockout() {
+        let dir = std::env::temp_dir();
+        let a = AuthStore::load(&dir.join("nonexistent-rustnas"), 60).unwrap();
+        let ip: IpAddr = "192.168.1.9".parse().unwrap();
+        for _ in 0..MAX_FAILS {
+            assert!(a.locked_for(ip).is_none());
+            a.record_failure(ip);
+        }
+        assert!(a.locked_for(ip).is_some());
+        a.record_success(ip);
+        assert!(a.locked_for(ip).is_none());
     }
 
     #[test]
