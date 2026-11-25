@@ -1,6 +1,6 @@
 ## RustNAS OS @VERSION@
 
-NAS siêu nhẹ cho **Raspberry Pi 3B (1 GB RAM)**, phần quản lý viết bằng Rust, quản trị qua web giống Proxmox.
+NAS OS siêu nhẹ cho **Raspberry Pi 3B (1 GB RAM)**, phần quản lý viết bằng Rust, quản trị qua web giống Proxmox.
 
 ### Tải file nào?
 
